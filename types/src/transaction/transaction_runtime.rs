@@ -1,20 +1,21 @@
+use super::serialization::{BinaryPayload, CalltableFromBytes, CalltableToBytes};
 use alloc::vec::Vec;
 use core::fmt::{self, Display, Formatter};
+#[cfg(feature = "datasize")]
+use datasize::DataSize;
+use macros::{CalltableFromBytes, CalltableToBytes};
 #[cfg(any(feature = "testing", test))]
 use rand::{
     distributions::{Distribution, Standard},
     Rng,
 };
-
-#[cfg(feature = "datasize")]
-use datasize::DataSize;
 #[cfg(feature = "json-schema")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[cfg(doc)]
 use super::Transaction;
-use crate::bytesrepr::{self, FromBytes, ToBytes, U8_SERIALIZED_LENGTH};
+use crate::bytesrepr;
 
 /// The runtime used to execute a [`Transaction`].
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
@@ -25,11 +26,13 @@ use crate::bytesrepr::{self, FromBytes, ToBytes, U8_SERIALIZED_LENGTH};
     schemars(description = "Runtime used to execute a Transaction.")
 )]
 #[serde(deny_unknown_fields)]
-#[repr(u8)]
+#[derive(CalltableToBytes, CalltableFromBytes)]
 pub enum TransactionRuntime {
     /// The Casper Version 1 Virtual Machine.
+    #[binary_index = 0]
     VmCasperV1,
     /// The Casper Version 2 Virtual Machine.
+    #[binary_index = 1]
     VmCasperV2,
 }
 
@@ -38,37 +41,6 @@ impl Display for TransactionRuntime {
         match self {
             TransactionRuntime::VmCasperV1 => write!(formatter, "vm-casper-v1"),
             TransactionRuntime::VmCasperV2 => write!(formatter, "vm-casper-v2"),
-        }
-    }
-}
-
-impl ToBytes for TransactionRuntime {
-    fn write_bytes(&self, writer: &mut Vec<u8>) -> Result<(), bytesrepr::Error> {
-        (*self as u8).write_bytes(writer)
-    }
-
-    fn to_bytes(&self) -> Result<Vec<u8>, bytesrepr::Error> {
-        let mut buffer = bytesrepr::allocate_buffer(self)?;
-        self.write_bytes(&mut buffer)?;
-        Ok(buffer)
-    }
-
-    fn serialized_length(&self) -> usize {
-        U8_SERIALIZED_LENGTH
-    }
-}
-
-impl FromBytes for TransactionRuntime {
-    fn from_bytes(bytes: &[u8]) -> Result<(Self, &[u8]), bytesrepr::Error> {
-        let (tag, remainder) = u8::from_bytes(bytes)?;
-        match tag {
-            v if v == TransactionRuntime::VmCasperV1 as u8 => {
-                Ok((TransactionRuntime::VmCasperV1, remainder))
-            }
-            v if v == TransactionRuntime::VmCasperV2 as u8 => {
-                Ok((TransactionRuntime::VmCasperV2, remainder))
-            }
-            _ => Err(bytesrepr::Error::Formatting),
         }
     }
 }
