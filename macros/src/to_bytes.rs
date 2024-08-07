@@ -59,7 +59,7 @@ pub fn internal_derive_trait(struct_name: &Ident, data: &Data) -> proc_macro::To
 
 fn destructure_arg_list(field_definitions: &FieldDefinitions) -> TokenStream {
     match field_definitions {
-        FieldDefinitions::UnnamedFieldDefinitions(fields) => {
+        FieldDefinitions::Unnamed(fields) => {
             let mut destructured = quote!();
             for (_position, field_definition) in fields.iter() {
                 let field_name = &field_definition.name_stub;
@@ -71,7 +71,7 @@ fn destructure_arg_list(field_definitions: &FieldDefinitions) -> TokenStream {
                 (#destructured)
             }
         }
-        FieldDefinitions::NamedFieldDefinitions(fields) => {
+        FieldDefinitions::Named(fields) => {
             let mut destructured = quote!();
             for (_position, field_definition) in fields.iter() {
                 let field_name = &field_definition.name;
@@ -98,7 +98,7 @@ fn generate_serialized_field_lengths_for_enum(
         let variant_args = destructure_arg_list(field_definitions);
 
         match field_definitions {
-            FieldDefinitions::UnnamedFieldDefinitions(fields) => {
+            FieldDefinitions::Unnamed(fields) => {
                 for (_position, field_definition) in fields.iter() {
                     if field_definition.index.is_some() {
                         let field_name = &field_definition.name_stub;
@@ -108,7 +108,7 @@ fn generate_serialized_field_lengths_for_enum(
                     }
                 }
             }
-            FieldDefinitions::NamedFieldDefinitions(fields) => {
+            FieldDefinitions::Named(fields) => {
                 for (_position, field_definition) in fields.iter() {
                     if field_definition.index.is_some() {
                         let field_name = &field_definition.name;
@@ -146,7 +146,7 @@ fn generate_serialize_for_enum(
         let variant_args = destructure_arg_list(field_definitions);
         let mut serialize_field_by_field = quote!();
         match field_definitions {
-            FieldDefinitions::UnnamedFieldDefinitions(fields) => {
+            FieldDefinitions::Unnamed(fields) => {
                 for (_position, field_definition) in fields.iter() {
                     if let Some(index) = &field_definition.index {
                         let field_name = &field_definition.name_stub;
@@ -156,7 +156,7 @@ fn generate_serialize_for_enum(
                     }
                 }
             }
-            FieldDefinitions::NamedFieldDefinitions(fields) => {
+            FieldDefinitions::Named(fields) => {
                 for (_position, field_definition) in fields.iter() {
                     if let Some(index) = &field_definition.index {
                         let field_name = &field_definition.name;
@@ -175,7 +175,7 @@ fn generate_serialize_for_enum(
                 crate::transaction::serialization::BinaryPayloadBuilder::new(self.serialized_field_lengths())?
                 .add_field(0, &#variant_index)?
                 #serialize_field_by_field
-                .to_binary_payload_bytes()
+                .binary_payload_bytes()
             },
         });
     }
@@ -191,7 +191,7 @@ fn generate_serialize_for_enum(
 fn generate_serialize(definitions: &FieldDefinitions) -> TokenStream {
     let mut serialize_field_by_field = quote!();
     match definitions {
-        FieldDefinitions::UnnamedFieldDefinitions(fields) => {
+        FieldDefinitions::Unnamed(fields) => {
             for (position, definition) in fields.iter() {
                 if let Some(index) = &definition.index {
                     let name = format!("{}", position);
@@ -201,7 +201,7 @@ fn generate_serialize(definitions: &FieldDefinitions) -> TokenStream {
                 }
             }
         }
-        FieldDefinitions::NamedFieldDefinitions(fields) => {
+        FieldDefinitions::Named(fields) => {
             for (_position, definition) in fields.iter() {
                 if let Some(index) = &definition.index {
                     let name = &definition.name;
@@ -217,7 +217,7 @@ fn generate_serialize(definitions: &FieldDefinitions) -> TokenStream {
         fn serialize(&self) -> Result<Vec<u8>, crate::bytesrepr::Error> {
             crate::transaction::serialization::BinaryPayloadBuilder::new(self.serialized_field_lengths())?
             #serialize_field_by_field
-            .to_binary_payload_bytes()
+            .binary_payload_bytes()
         }
     }
 }
@@ -225,7 +225,7 @@ fn generate_serialize(definitions: &FieldDefinitions) -> TokenStream {
 fn generate_serialized_field_lengths(definitions: &FieldDefinitions) -> TokenStream {
     let mut serialized_field_lengths = quote!();
     match definitions {
-        FieldDefinitions::UnnamedFieldDefinitions(fields) => {
+        FieldDefinitions::Unnamed(fields) => {
             for (idx, _) in fields.iter() {
                 let name = format!("{}", idx);
                 serialized_field_lengths.extend(quote! {
@@ -233,7 +233,7 @@ fn generate_serialized_field_lengths(definitions: &FieldDefinitions) -> TokenStr
                 });
             }
         }
-        FieldDefinitions::NamedFieldDefinitions(fields) => {
+        FieldDefinitions::Named(fields) => {
             for (_, definition) in fields.iter() {
                 let name = &definition.name;
                 serialized_field_lengths.extend(quote! {

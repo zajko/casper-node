@@ -22,13 +22,13 @@ pub fn internal_derive_trait(struct_name: &Ident, data: &Data) -> proc_macro::To
             if let Err(e) = validate_struct_fields(struct_name.to_string(), &field_definitions) {
                 panic!("{}", e)
             }
-            generate_from_bytes(&struct_name, &field_definitions)
+            generate_from_bytes(struct_name, &field_definitions)
         }
         crate::types::TypeDescription::Enum(enum_variants) => {
             if let Err(e) = validate_enum_variants(struct_name.to_string(), &enum_variants) {
                 panic!("{}", e)
             }
-            generate_from_bytes_for_variants(&struct_name, &enum_variants)
+            generate_from_bytes_for_variants(struct_name, &enum_variants)
         }
     };
 
@@ -128,7 +128,7 @@ fn build_deserialization_for_field_definitions(
     let mut new_struct_body = quote!();
     let mut new_struct_body_inner = quote!();
     match definitions {
-        FieldDefinitions::UnnamedFieldDefinitions(fields) => {
+        FieldDefinitions::Unnamed(fields) => {
             let mut new_struct_body_inner = quote!();
             for (_idx, definition) in fields.iter() {
                 let name = &definition.name_stub;
@@ -152,7 +152,7 @@ fn build_deserialization_for_field_definitions(
                 (#new_struct_body_inner)
             };
         }
-        FieldDefinitions::NamedFieldDefinitions(fields) => {
+        FieldDefinitions::Named(fields) => {
             for (_idx, definition) in fields.iter() {
                 let name = &definition.name;
                 let ty: &syn::Type = &definition.ty;

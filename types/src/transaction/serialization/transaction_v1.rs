@@ -85,7 +85,7 @@ impl<'a> ToBytes for TransactionV1BinaryToBytes<'a> {
             .add_field(HEADER_FIELD_META_INDEX, &self.header)?
             .add_field(BODY_FIELD_META_INDEX, &self.body)?
             .add_field(APPROVALS_FIELD_META_INDEX, &self.approvals)?
-            .to_binary_payload_bytes()
+            .binary_payload_bytes()
     }
 
     fn serialized_length(&self) -> usize {

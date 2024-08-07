@@ -2,7 +2,7 @@ use super::serialization::{BinaryPayload, CalltableFromBytes, CalltableToBytes};
 #[cfg(any(feature = "testing", test))]
 use crate::testing::TestRng;
 use crate::{
-    bytesrepr::{self, FromBytes, ToBytes},
+    bytesrepr::{self, ToBytes},
     EraId, Timestamp,
 };
 use alloc::vec::Vec;

@@ -84,7 +84,7 @@ impl BinaryPayloadBuilder {
             bytes: payload_buffer,
             current_field_index: 0,
             current_offset: 0,
-            written_bytes: (fields_size + U32_SERIALIZED_LENGTH) as usize,
+            written_bytes: fields_size + U32_SERIALIZED_LENGTH,
         })
     }
 
@@ -115,7 +115,7 @@ impl BinaryPayloadBuilder {
         Ok(self)
     }
 
-    pub fn to_binary_payload_bytes(mut self) -> Result<Vec<u8>, Error> {
+    pub fn binary_payload_bytes(mut self) -> Result<Vec<u8>, Error> {
         if self.current_field_index != self.expected_payload_sizes.len() {
             //We didn't write all the fields we expected
             return Err(Error::NotRepresentable);
@@ -159,7 +159,7 @@ impl BinaryPayload {
             expected_size,
             field,
             bytes: &self.bytes,
-            parent: &self,
+            parent: self,
         }))
     }
 

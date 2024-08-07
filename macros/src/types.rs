@@ -10,28 +10,28 @@ pub(crate) enum IndexDataOfField {
     SkipBinarySerialization,
     NoBinaryData,
 }
-pub enum FieldDefinitions {
-    UnnamedFieldDefinitions(BTreeMap<u16, UnnamedFieldDefinition>),
-    NamedFieldDefinitions(BTreeMap<u16, NamedFieldDefinition>),
+pub(crate) enum FieldDefinitions {
+    Unnamed(BTreeMap<u16, UnnamedFieldDefinition>),
+    Named(BTreeMap<u16, NamedFieldDefinition>),
     Unit,
 }
 
 impl FieldDefinitions {
     pub(crate) fn number_of_fields(&self) -> usize {
         match self {
-            FieldDefinitions::UnnamedFieldDefinitions(fields) => fields.len(),
-            FieldDefinitions::NamedFieldDefinitions(fields) => fields.len(),
+            FieldDefinitions::Unnamed(fields) => fields.len(),
+            FieldDefinitions::Named(fields) => fields.len(),
             FieldDefinitions::Unit => 0,
         }
     }
     pub(crate) fn indexes(&self) -> Vec<u16> {
         let mut to_ret = match self {
-            FieldDefinitions::UnnamedFieldDefinitions(fields) => fields
+            FieldDefinitions::Unnamed(fields) => fields
                 .iter()
                 .filter(|(_, v)| v.index.is_some())
                 .map(|(_, v)| v.index.unwrap())
                 .collect(),
-            FieldDefinitions::NamedFieldDefinitions(fields) => fields
+            FieldDefinitions::Named(fields) => fields
                 .iter()
                 .filter(|(_, v)| v.index.is_some())
                 .map(|(_, v)| v.index.unwrap())
@@ -128,8 +128,7 @@ fn build_index_map(fields: &Fields) -> Result<FieldDefinitions, ParsingError> {
                 if let Some(idx) = field_definition.index {
                     if binary_indexes
                         .iter()
-                        .find(|(_, v)| v.index.is_some() && v.index.unwrap() == idx)
-                        .is_some()
+                        .any(|(_, v)| v.index.is_some() && v.index.unwrap() == idx)
                     {
                         return Err(ParsingError::MultipleIndexUsages {
                             field_name: name.to_string(),
@@ -140,7 +139,7 @@ fn build_index_map(fields: &Fields) -> Result<FieldDefinitions, ParsingError> {
                 binary_indexes.insert(field_index, field_definition);
                 field_index += 1;
             }
-            Ok(FieldDefinitions::NamedFieldDefinitions(binary_indexes))
+            Ok(FieldDefinitions::Named(binary_indexes))
         }
         syn::Fields::Unnamed(unnamed) => {
             let mut binary_indexes: BTreeMap<u16, UnnamedFieldDefinition> = BTreeMap::new();
@@ -151,8 +150,7 @@ fn build_index_map(fields: &Fields) -> Result<FieldDefinitions, ParsingError> {
                 if let Some(idx) = field_definition.index {
                     if binary_indexes
                         .iter()
-                        .find(|(_, v)| v.index.is_some() && v.index.unwrap() == idx)
-                        .is_some()
+                        .any(|(_, v)| v.index.is_some() && v.index.unwrap() == idx)
                     {
                         return Err(ParsingError::MultipleIndexUsages {
                             field_name: field_definition.name.to_string(),
@@ -170,25 +168,25 @@ fn build_index_map(fields: &Fields) -> Result<FieldDefinitions, ParsingError> {
                 );
                 field_index += 1;
             }
-            Ok(FieldDefinitions::UnnamedFieldDefinitions(binary_indexes))
+            Ok(FieldDefinitions::Unnamed(binary_indexes))
         }
         syn::Fields::Unit => Ok(FieldDefinitions::Unit),
     }
 }
 
 fn build_field_definition(
-    attrs: &Vec<Attribute>,
+    attrs: &[Attribute],
     name: Option<&Ident>,
     ty: &Type,
     field_position: u16,
 ) -> Result<NamedFieldDefinition, ParsingError> {
-    let field_ident = field_name_or_field_position(name.clone(), field_position);
+    let field_ident = field_name_or_field_position(name, field_position);
     let field_name = field_ident.to_string();
     let binary_index = get_binary_index(attrs, field_name.clone())?;
 
     match binary_index {
         Some(IndexDataOfField::BinaryIndex(idx)) => Ok(NamedFieldDefinition {
-            name: field_ident.clone(),
+            name: field_ident,
             index: Some(idx),
             ty: ty.clone(),
         }),
@@ -196,7 +194,7 @@ fn build_field_definition(
             //We need to keep data about skipped fields, because for unnamed fields we need to keep
             // the order
             Ok(NamedFieldDefinition {
-                name: field_ident.clone(),
+                name: field_ident,
                 index: None,
                 ty: ty.clone(),
             })
@@ -206,7 +204,7 @@ fn build_field_definition(
 }
 
 fn get_binary_index(
-    attrs: &Vec<Attribute>,
+    attrs: &[Attribute],
     name: String,
 ) -> Result<Option<IndexDataOfField>, ParsingError> {
     let mut binary_index: Option<IndexDataOfField> = None;
@@ -215,9 +213,7 @@ fn get_binary_index(
             IndexDataOfField::BinaryIndex(_) | IndexDataOfField::SkipBinarySerialization
                 if binary_index.is_some() =>
             {
-                return Err(ParsingError::MultipleBinaryAttributes {
-                    field_name: name.to_string(),
-                });
+                return Err(ParsingError::MultipleBinaryAttributes { field_name: name });
             }
             bi @ (IndexDataOfField::BinaryIndex(_) | IndexDataOfField::SkipBinarySerialization) => {
                 binary_index = Some(bi)
@@ -280,11 +276,11 @@ fn parse_binary_index(
             }
         }
     }
-    return Ok(IndexDataOfField::NoBinaryData);
+    Ok(IndexDataOfField::NoBinaryData)
 }
 
 pub(crate) fn field_name_or_field_position(name: Option<&Ident>, position: u16) -> Ident {
-    name.map(|i| i.clone()).unwrap_or(Ident::new_raw(
+    name.cloned().unwrap_or(Ident::new_raw(
         format!("field_{}", position).as_str(),
         Span::call_site(),
     ))
@@ -326,7 +322,7 @@ pub(crate) fn validate_enum_variants(
             });
         }
     }
-    return Ok(());
+    Ok(())
 }
 
 pub(crate) fn validate_struct_fields(
@@ -342,5 +338,5 @@ pub(crate) fn validate_struct_fields(
             expected_indexes,
         });
     }
-    return Ok(());
+    Ok(())
 }
