@@ -42,13 +42,14 @@ pub enum TransactionInvocationTarget {
             description = "Hex-encoded entity address identifying the invocable entity."
         )
     )]
-    #[binary_index = 0]
-    ByHash(#[binary_index = 1] HashAddr), // currently needs to be of contract tag variant
+    #[calltable(variant_index = 0)]
+    ByHash(#[calltable(field_index = 1)] HashAddr), /* currently needs to be of contract tag
+                                                     * variant */
     /// The alias identifying the invocable entity.
-    #[binary_index = 1]
-    ByName(#[binary_index = 1] String),
+    #[calltable(variant_index = 1)]
+    ByName(#[calltable(field_index = 1)] String),
     /// The address and optional version identifying the package.
-    #[binary_index = 2]
+    #[calltable(variant_index = 2)]
     ByPackageHash {
         /// The package address.
         #[serde(with = "serde_helpers::raw_32_byte_array")]
@@ -56,24 +57,24 @@ pub enum TransactionInvocationTarget {
             feature = "json-schema",
             schemars(with = "String", description = "Hex-encoded address of the package.")
         )]
-        #[binary_index = 1]
+        #[calltable(field_index = 1)]
         addr: PackageAddr,
         /// The package version.
         ///
         /// If `None`, the latest enabled version is implied.
-        #[binary_index = 2]
+        #[calltable(field_index = 2)]
         version: Option<EntityVersion>,
     },
     /// The alias and optional version identifying the package.
-    #[binary_index = 3]
+    #[calltable(variant_index = 3)]
     ByPackageName {
         /// The package name.
-        #[binary_index = 1]
+        #[calltable(field_index = 1)]
         name: String,
         /// The package version.
         ///
         /// If `None`, the latest enabled version is implied.
-        #[binary_index = 2]
+        #[calltable(field_index = 2)]
         version: Option<EntityVersion>,
     },
 }

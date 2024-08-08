@@ -1,8 +1,14 @@
 use std::fmt::{self, Display, Formatter};
 
-use crate::BINARY_INDEX_ATTRIBUTE;
+use crate::FIELD_INDEX_ATTRIBUTE;
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ParsingError {
+    MalfrormedCalltableAttribute {
+        attribute_name: String,
+        field_name: String,
+        got: String,
+    },
     MultipleBinaryAttributes {
         field_name: String,
     },
@@ -17,6 +23,7 @@ pub(crate) enum ParsingError {
         data_type: String,
     },
     UnexpectedBinaryIndexDefinition {
+        attribute_name: String,
         field_name: String,
         got: String,
     },
@@ -56,7 +63,7 @@ impl Display for ParsingError {
                 write!(
                     formatter,
                     "Field {} has multiple {} attributes",
-                    field_name, BINARY_INDEX_ATTRIBUTE
+                    field_name, FIELD_INDEX_ATTRIBUTE
                 )
             }
             ParsingError::MultipleIndexUsages { field_name, index } => {
@@ -69,19 +76,20 @@ impl Display for ParsingError {
             ParsingError::BinaryAttributeMissing { field_name } => {
                 write!(
                     formatter,
-                    "Field {} is missing {}. If you don't want to use binary serialization for this field, use `#[binary_index = \"skip\"]`",
+                    "Field {} is missing {}. If you don't want to use binary serialization for this field, use `#[calltable(skip)]`",
                     field_name,
-                    BINARY_INDEX_ATTRIBUTE
+                    FIELD_INDEX_ATTRIBUTE
                 )
             }
             ParsingError::UnsupportedDataType { data_type } => {
                 write!(formatter, "Unsupported type of data: {}", data_type)
             }
-            ParsingError::UnexpectedBinaryIndexDefinition { field_name, got } => {
+            ParsingError::UnexpectedBinaryIndexDefinition { attribute_name, field_name, got } => {
                 write!(
                     formatter,
-                    "Field {}. Expected either `binary_index = <u16>` or `binary_index = \"skip\"`. Got binary_index = {}",
+                    "Field {}. Expected either `#[calltable({} = <u16>)]` or `#[calltable(skip)]`. Got {}",
                     field_name,
+                    attribute_name,
                     got
                 )
             }
@@ -101,7 +109,7 @@ impl Display for ParsingError {
             ParsingError::SkipNotAllowedForEnum { variant_name } => {
                 write!(
                     formatter,
-                    "Variant {} has #[binary_index = \"skip\"] definition which is not allowed",
+                    "Variant {} has #[calltable(skip)] definition which is not allowed on an enum variant",
                     variant_name,
                 )
             }
@@ -136,6 +144,13 @@ impl Display for ParsingError {
                 struct_name,
                 found_indexes,
                 expected_indexes
+            ),
+            ParsingError::MalfrormedCalltableAttribute { attribute_name, field_name, got } => write!(
+                formatter,
+                "Parsing field {}. Expected attribute \"calltable\" to be in form \"#[calltable({} = <u16>)]\" or \"#[calltable(skip)]\". Got: {}",
+                field_name,
+                attribute_name,
+                got
             ),
         }
     }

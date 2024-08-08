@@ -1,14 +1,16 @@
 use proc_macro2::Span;
 use quote::ToTokens;
 use std::{collections::BTreeMap, u16};
-use syn::{Attribute, Fields, Ident, Meta, Type};
+use syn::{punctuated::Punctuated, Attribute, Fields, Ident, Meta, Token, Type};
 
-use crate::{error::ParsingError, BINARY_INDEX_ATTRIBUTE};
-
+use crate::{
+    error::ParsingError, CALLTABLE_ATTRIBUTE, FIELD_INDEX_ATTRIBUTE, VARIANT_INDEX_ATTRIBUTE,
+};
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum IndexDataOfField {
     BinaryIndex(u16),
     SkipBinarySerialization,
-    NoBinaryData,
+    NoIndexData,
 }
 pub(crate) enum FieldDefinitions {
     Unnamed(BTreeMap<u16, UnnamedFieldDefinition>),
@@ -76,21 +78,24 @@ pub(crate) fn build_type_description(data: &syn::Data) -> Result<TypeDescription
             let mut variants = BTreeMap::new();
             for variant in enum_data.variants.iter() {
                 let variant_name = variant.ident.clone();
-                let maybe_binary_index =
-                    get_binary_index(&variant.attrs, variant_name.to_string())?;
+                let maybe_index_data = get_index_attribute(
+                    VARIANT_INDEX_ATTRIBUTE,
+                    &variant.attrs,
+                    variant_name.to_string(),
+                )?;
 
-                match maybe_binary_index {
-                    Some(IndexDataOfField::SkipBinarySerialization) => {
+                match maybe_index_data {
+                    IndexDataOfField::SkipBinarySerialization => {
                         return Err(ParsingError::SkipNotAllowedForEnum {
                             variant_name: variant_name.to_string(),
                         })
                     }
-                    Some(IndexDataOfField::NoBinaryData) => {
+                    IndexDataOfField::NoIndexData => {
                         return Err(ParsingError::BinaryAttributeMissing {
                             field_name: variant_name.to_string(),
                         })
                     }
-                    Some(IndexDataOfField::BinaryIndex(idx)) => {
+                    IndexDataOfField::BinaryIndex(idx) => {
                         variants.insert(
                             idx as u8,
                             EnumVariant {
@@ -99,11 +104,6 @@ pub(crate) fn build_type_description(data: &syn::Data) -> Result<TypeDescription
                                 field_definitions: build_index_map(&variant.fields)?,
                             },
                         );
-                    }
-                    None => {
-                        return Err(ParsingError::BinaryAttributeMissing {
-                            field_name: variant_name.to_string(),
-                        })
                     }
                 }
             }
@@ -182,15 +182,15 @@ fn build_field_definition(
 ) -> Result<NamedFieldDefinition, ParsingError> {
     let field_ident = field_name_or_field_position(name, field_position);
     let field_name = field_ident.to_string();
-    let binary_index = get_binary_index(attrs, field_name.clone())?;
+    let index = get_index_attribute(FIELD_INDEX_ATTRIBUTE, attrs, field_name.clone())?;
 
-    match binary_index {
-        Some(IndexDataOfField::BinaryIndex(idx)) => Ok(NamedFieldDefinition {
+    match index {
+        IndexDataOfField::BinaryIndex(idx) => Ok(NamedFieldDefinition {
             name: field_ident,
             index: Some(idx),
             ty: ty.clone(),
         }),
-        Some(_) => {
+        IndexDataOfField::SkipBinarySerialization => {
             //We need to keep data about skipped fields, because for unnamed fields we need to keep
             // the order
             Ok(NamedFieldDefinition {
@@ -199,84 +199,103 @@ fn build_field_definition(
                 ty: ty.clone(),
             })
         }
-        None => Err(ParsingError::BinaryAttributeMissing { field_name }),
+        IndexDataOfField::NoIndexData => Err(ParsingError::BinaryAttributeMissing { field_name }),
     }
 }
 
-fn get_binary_index(
+fn get_index_attribute(
+    attribute_name: &str,
     attrs: &[Attribute],
     name: String,
-) -> Result<Option<IndexDataOfField>, ParsingError> {
-    let mut binary_index: Option<IndexDataOfField> = None;
+) -> Result<IndexDataOfField, ParsingError> {
+    let mut index: Option<IndexDataOfField> = None;
     for attr in attrs.iter() {
-        match parse_binary_index(name.clone(), attr)? {
-            IndexDataOfField::BinaryIndex(_) | IndexDataOfField::SkipBinarySerialization
-                if binary_index.is_some() =>
-            {
-                return Err(ParsingError::MultipleBinaryAttributes { field_name: name });
+        match parse_single_attribute(attr, attribute_name, &name)? {
+            IndexDataOfField::BinaryIndex(_) if index.is_some() => {
+                return Err(ParsingError::MultipleBinaryAttributes { field_name: name })
             }
-            bi @ (IndexDataOfField::BinaryIndex(_) | IndexDataOfField::SkipBinarySerialization) => {
-                binary_index = Some(bi)
+            val @ IndexDataOfField::BinaryIndex(_) => {
+                index = Some(val);
             }
-            IndexDataOfField::NoBinaryData => {}
+            val @ IndexDataOfField::SkipBinarySerialization => return Ok(val),
+            IndexDataOfField::NoIndexData => {}
         }
     }
-    Ok(binary_index)
+    Ok(index.unwrap_or(IndexDataOfField::NoIndexData))
 }
 
-fn parse_binary_index(
-    field_name: String,
-    attr: &syn::Attribute,
+fn parse_single_attribute(
+    attr: &Attribute,
+    attribute_name: &str,
+    field_name: &str,
 ) -> Result<IndexDataOfField, ParsingError> {
-    if attr.path().is_ident(BINARY_INDEX_ATTRIBUTE) {
+    if attr.path().is_ident(CALLTABLE_ATTRIBUTE) {
         let meta = &attr.meta;
         match meta {
-            Meta::NameValue(nv) => {
-                match &nv.value {
-                    syn::Expr::Lit(lit) => match &lit.lit {
-                        syn::Lit::Str(s) if s.value() == "skip" => {
-                            return Ok(IndexDataOfField::SkipBinarySerialization)
-                        }
-                        syn::Lit::Str(s) => {
-                            return Err(ParsingError::UnexpectedBinaryIndexDefinition {
-                                field_name,
-                                got: s.value(),
-                            })
-                        }
-                        syn::Lit::Int(i) => {
-                            let v: u16 =
-                                i.base10_parse()
-                                    .map_err(|e| ParsingError::IndexValueNotU16 {
-                                        field_name,
+            Meta::List(list) => {
+                let fetched_attributes = list
+                    .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+                    .map_err(|e| ParsingError::MalfrormedCalltableAttribute {
+                        attribute_name: attribute_name.to_string(),
+                        field_name: field_name.to_string(),
+                        got: e.to_string(),
+                    })?;
+                if fetched_attributes.len() != 1 {
+                    return Err(ParsingError::MalfrormedCalltableAttribute {
+                        attribute_name: attribute_name.to_string(),
+                        field_name: field_name.to_string(),
+                        got: list.to_token_stream().to_string(),
+                    });
+                }
+                let meta = fetched_attributes.get(0).unwrap();
+                match meta {
+                    Meta::NameValue(nv) => match &nv.value {
+                        syn::Expr::Lit(lit) => match &lit.lit {
+                            syn::Lit::Str(s) if s.value() == "skip" => {
+                                Ok(IndexDataOfField::SkipBinarySerialization)
+                            }
+                            syn::Lit::Int(i) => {
+                                let v: u16 = i.base10_parse().map_err(|e| {
+                                    ParsingError::IndexValueNotU16 {
+                                        field_name: field_name.to_string(),
                                         got: i.to_string(),
                                         err: e.to_string(),
-                                    })?;
-                            return Ok(IndexDataOfField::BinaryIndex(v));
-                        }
-                        _ => {
-                            return Err(ParsingError::UnexpectedBinaryIndexDefinition {
-                                field_name,
+                                    }
+                                })?;
+                                Ok(IndexDataOfField::BinaryIndex(v))
+                            }
+                            _ => Err(ParsingError::UnexpectedBinaryIndexDefinition {
+                                attribute_name: attribute_name.to_string(),
+                                field_name: field_name.to_string(),
                                 got: lit.into_token_stream().to_string(),
-                            })
-                        }
-                    },
-                    _ => {
-                        return Err(ParsingError::UnexpectedBinaryIndexDefinition {
-                            field_name,
+                            }),
+                        },
+                        _ => Err(ParsingError::UnexpectedBinaryIndexDefinition {
+                            attribute_name: attribute_name.to_string(),
+                            field_name: field_name.to_string(),
                             got: (&nv.value).into_token_stream().to_string(),
-                        })
+                        }),
+                    },
+                    Meta::Path(path) if path.is_ident("skip") => {
+                        path.segments.len();
+                        Ok(IndexDataOfField::SkipBinarySerialization)
                     }
-                };
+                    _ => Err(ParsingError::MalfrormedCalltableAttribute {
+                        attribute_name: attribute_name.to_string(),
+                        field_name: field_name.to_string(),
+                        got: list.to_token_stream().to_string(),
+                    }),
+                }
             }
-            _ => {
-                return Err(ParsingError::UnexpectedBinaryIndexDefinition {
-                    field_name,
-                    got: meta.into_token_stream().to_string(),
-                })
-            }
+            _ => Err(ParsingError::MalfrormedCalltableAttribute {
+                attribute_name: attribute_name.to_string(),
+                field_name: field_name.to_string(),
+                got: attr.to_token_stream().to_string(),
+            }),
         }
+    } else {
+        Ok(IndexDataOfField::NoIndexData)
     }
-    Ok(IndexDataOfField::NoBinaryData)
 }
 
 pub(crate) fn field_name_or_field_position(name: Option<&Ident>, position: u16) -> Ident {
@@ -291,6 +310,7 @@ fn get_indexes(enum_variants: &BTreeMap<u8, EnumVariant>) -> Vec<u8> {
     to_ret.sort();
     to_ret
 }
+
 pub(crate) fn validate_enum_variants(
     enum_name: String,
     enum_variants: &BTreeMap<u8, EnumVariant>,
@@ -339,4 +359,160 @@ pub(crate) fn validate_struct_fields(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::{parse_quote, Attribute};
+
+    #[test]
+    fn parse_single_attribute_should_fetch_skip_from_calltable_property() {
+        let attr: Attribute = parse_quote! {
+            #[calltable(skip)]
+        };
+        assert_eq!(
+            parse_single_attribute(&attr, "field_index", "xyz"),
+            Ok(IndexDataOfField::SkipBinarySerialization)
+        );
+    }
+
+    #[test]
+    fn given_malformed_skip_when_calling_parse_single_attribute_then_should_fail() {
+        let attr: Attribute = parse_quote! {
+            #[calltable(skip = 1)]
+        };
+        let a = parse_single_attribute(&attr, "field_index", "xyz");
+        assert!(matches!(
+            a,
+            Err(ParsingError::MalfrormedCalltableAttribute { .. })
+        ));
+
+        let attr: Attribute = parse_quote! {
+            #[calltable(skip = "a")]
+        };
+        assert!(matches!(
+            parse_single_attribute(&attr, "field_index", "xyz"),
+            Err(ParsingError::MalfrormedCalltableAttribute { .. })
+        ));
+
+        let attr: Attribute = parse_quote! {
+            #[calltable(skip = a)]
+        };
+        assert!(matches!(
+            parse_single_attribute(&attr, "field_index", "xyz"),
+            Err(ParsingError::MalfrormedCalltableAttribute { .. })
+        ));
+    }
+
+    #[test]
+    fn parse_single_attribute_should_fetch_index_from_calltable_property() {
+        let attr: Attribute = parse_quote! {
+            #[calltable(field_index = 0)]
+        };
+        assert_eq!(
+            parse_single_attribute(&attr, "field_index", "xyz"),
+            Ok(IndexDataOfField::BinaryIndex(0))
+        );
+    }
+
+    #[test]
+    fn parse_single_attribute_should_fetch_index_from_calltable_property_other_value() {
+        let attr: Attribute = parse_quote! {
+            #[calltable(field_index = 5)]
+        };
+        assert_eq!(
+            parse_single_attribute(&attr, "field_index", "xyz"),
+            Ok(IndexDataOfField::BinaryIndex(5))
+        );
+    }
+
+    #[test]
+    fn parse_single_attribute_should_fetch_index_from_calltable_property_other_attribute_name() {
+        let attr: Attribute = parse_quote! {
+            #[calltable(abc = 5)]
+        };
+        assert_eq!(
+            parse_single_attribute(&attr, "abc", "xyz"),
+            Ok(IndexDataOfField::BinaryIndex(5))
+        );
+    }
+
+    #[test]
+    fn parse_single_attribute_should_fail_if_queried_attribute_is_not_present() {
+        let attr: Attribute = parse_quote! {
+            #[calltable(qqq = 5)]
+        };
+        matches!(
+            parse_single_attribute(&attr, "abc", "xyz"),
+            Err(ParsingError::BinaryAttributeMissing { .. })
+        );
+    }
+
+    #[test]
+    fn parse_single_attribute_should_fail_if_multiple_calltable_attributes() {
+        let attr: Attribute = parse_quote! {
+            #[calltable(abc = 5, abc = 3)]
+        };
+        matches!(
+            parse_single_attribute(&attr, "abc", "xyz"),
+            Err(ParsingError::BinaryAttributeMissing { .. })
+        );
+
+        let attr: Attribute = parse_quote! {
+            #[calltable(skip, skip)]
+        };
+        matches!(
+            parse_single_attribute(&attr, "abc", "xyz"),
+            Err(ParsingError::BinaryAttributeMissing { .. })
+        );
+
+        let attr: Attribute = parse_quote! {
+            #[calltable(abc = 5, abc = 5)]
+        };
+        matches!(
+            parse_single_attribute(&attr, "abc", "xyz"),
+            Err(ParsingError::BinaryAttributeMissing { .. })
+        );
+
+        let attr: Attribute = parse_quote! {
+            #[calltable(abc = 5, def = 5)]
+        };
+        matches!(
+            parse_single_attribute(&attr, "abc", "xyz"),
+            Err(ParsingError::BinaryAttributeMissing { .. })
+        );
+
+        let attr: Attribute = parse_quote! {
+            #[calltable(abc = 5, xxx)]
+        };
+        matches!(
+            parse_single_attribute(&attr, "abc", "xyz"),
+            Err(ParsingError::BinaryAttributeMissing { .. })
+        );
+
+        let attr: Attribute = parse_quote! {
+            #[calltable(abc = 5, some_other(a))]
+        };
+        matches!(
+            parse_single_attribute(&attr, "abc", "xyz"),
+            Err(ParsingError::BinaryAttributeMissing { .. })
+        );
+
+        let attr: Attribute = parse_quote! {
+            #[calltable(abc = 5, calltable(a, b, x = 1))]
+        };
+        matches!(
+            parse_single_attribute(&attr, "abc", "xyz"),
+            Err(ParsingError::BinaryAttributeMissing { .. })
+        );
+
+        let attr: Attribute = parse_quote! {
+            #[calltable(abc = 5, calltable(abc = 10))]
+        };
+        matches!(
+            parse_single_attribute(&attr, "abc", "xyz"),
+            Err(ParsingError::BinaryAttributeMissing { .. })
+        );
+    }
 }

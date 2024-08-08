@@ -30,11 +30,11 @@ use serde::{Deserialize, Serialize};
 #[derive(CalltableToBytes, CalltableFromBytes)]
 pub enum TransactionEntryPoint {
     /// The standard `call` entry point used in session code.
-    #[binary_index = 0]
+    #[calltable(variant_index = 0)]
     Call,
     /// A non-native, arbitrary entry point.
-    #[binary_index = 1]
-    Custom(#[binary_index = 1] String),
+    #[calltable(variant_index = 1)]
+    Custom(#[calltable(field_index = 1)] String),
     /// The `transfer` native entry point, used to transfer `Motes` from a source purse to a target
     /// purse.
     ///
@@ -53,7 +53,7 @@ pub enum TransactionEntryPoint {
             source purse to a target purse."
         )
     )]
-    #[binary_index = 2]
+    #[calltable(variant_index = 2)]
     Transfer,
     /// The `add_bid` native entry point, used to create or top off a bid purse.
     ///
@@ -69,7 +69,7 @@ pub enum TransactionEntryPoint {
             description = "The `add_bid` native entry point, used to create or top off a bid purse."
         )
     )]
-    #[binary_index = 3]
+    #[calltable(variant_index = 3)]
     AddBid,
     /// The `withdraw_bid` native entry point, used to decrease a stake.
     ///
@@ -80,7 +80,7 @@ pub enum TransactionEntryPoint {
         feature = "json-schema",
         schemars(description = "The `withdraw_bid` native entry point, used to decrease a stake.")
     )]
-    #[binary_index = 4]
+    #[calltable(variant_index = 4)]
     WithdrawBid,
 
     /// The `delegate` native entry point, used to add a new delegator or increase an existing
@@ -97,7 +97,7 @@ pub enum TransactionEntryPoint {
             increase an existing delegator's stake."
         )
     )]
-    #[binary_index = 5]
+    #[calltable(variant_index = 5)]
     Delegate,
 
     /// The `undelegate` native entry point, used to reduce a delegator's stake or remove the
@@ -114,7 +114,7 @@ pub enum TransactionEntryPoint {
             stake or remove the delegator if the remaining stake is 0."
         )
     )]
-    #[binary_index = 6]
+    #[calltable(variant_index = 6)]
     Undelegate,
 
     /// The `redelegate` native entry point, used to reduce a delegator's stake or remove the
@@ -134,7 +134,7 @@ pub enum TransactionEntryPoint {
             automatically delegate to a new validator."
         )
     )]
-    #[binary_index = 7]
+    #[calltable(variant_index = 7)]
     Redelegate,
 
     /// The `activate bid` native entry point, used to reactivate an inactive bid.
@@ -148,7 +148,7 @@ pub enum TransactionEntryPoint {
             inactive bid."
         )
     )]
-    #[binary_index = 8]
+    #[calltable(variant_index = 8)]
     ActivateBid,
 
     /// The `change_bid_public_key` native entry point, used to change a bid's public key.
@@ -162,7 +162,7 @@ pub enum TransactionEntryPoint {
             description = "The `change_bid_public_key` native entry point, used to change a bid's public key."
         )
     )]
-    #[binary_index = 9]
+    #[calltable(variant_index = 9)]
     ChangeBidPublicKey,
 }
 

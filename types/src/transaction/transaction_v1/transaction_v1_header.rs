@@ -37,17 +37,17 @@ use macros::{CalltableFromBytes, CalltableToBytes};
 )]
 #[derive(CalltableToBytes, CalltableFromBytes)]
 pub struct TransactionV1Header {
-    #[binary_index = 0]
+    #[calltable(field_index = 0)]
     chain_name: String,
-    #[binary_index = 1]
+    #[calltable(field_index = 1)]
     timestamp: Timestamp,
-    #[binary_index = 2]
+    #[calltable(field_index = 2)]
     ttl: TimeDiff,
-    #[binary_index = 3]
+    #[calltable(field_index = 3)]
     body_hash: Digest,
-    #[binary_index = 4]
+    #[calltable(field_index = 4)]
     pricing_mode: PricingMode,
-    #[binary_index = 5]
+    #[calltable(field_index = 5)]
     initiator_addr: InitiatorAddr,
 }
 

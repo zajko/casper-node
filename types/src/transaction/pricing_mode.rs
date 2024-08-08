@@ -33,36 +33,36 @@ use macros::{CalltableFromBytes, CalltableToBytes};
 pub enum PricingMode {
     /// The original payment model, where the creator of the transaction
     /// specifies how much they will pay, at what gas price.
-    #[binary_index = 0]
+    #[calltable(variant_index = 0)]
     Classic {
         /// User-specified payment amount.
-        #[binary_index = 1]
+        #[calltable(field_index = 1)]
         payment_amount: u64,
         /// User-specified gas_price tolerance (minimum 1).
         /// This is interpreted to mean "do not include this transaction in a block
         /// if the current gas price is greater than this number"
-        #[binary_index = 2]
+        #[calltable(field_index = 2)]
         gas_price_tolerance: u8,
         /// Standard payment.
-        #[binary_index = 3]
+        #[calltable(field_index = 3)]
         standard_payment: bool,
     },
     /// The cost of the transaction is determined by the cost table, per the
     /// transaction category.
-    #[binary_index = 1]
+    #[calltable(variant_index = 1)]
     Fixed {
         /// User-specified gas_price tolerance (minimum 1).
         /// This is interpreted to mean "do not include this transaction in a block
         /// if the current gas price is greater than this number"
-        #[binary_index = 1]
+        #[calltable(field_index = 1)]
         gas_price_tolerance: u8,
     },
     /// The payment for this transaction was previously reserved, as proven by
     /// the receipt hash (this is for future use, not currently implemented).
-    #[binary_index = 2]
+    #[calltable(variant_index = 2)]
     Reserved {
         /// Pre-paid receipt.
-        #[binary_index = 1]
+        #[calltable(variant_index = 1)]
         receipt: Digest,
     },
 }

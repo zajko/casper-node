@@ -29,10 +29,10 @@ use crate::bytesrepr;
 #[derive(CalltableToBytes, CalltableFromBytes)]
 pub enum TransactionRuntime {
     /// The Casper Version 1 Virtual Machine.
-    #[binary_index = 0]
+    #[calltable(variant_index = 0)]
     VmCasperV1,
     /// The Casper Version 2 Virtual Machine.
-    #[binary_index = 1]
+    #[calltable(variant_index = 1)]
     VmCasperV2,
 }
 

@@ -28,12 +28,12 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 #[derive(CalltableToBytes, CalltableFromBytes)]
 pub enum InitiatorAddr {
-    #[binary_index = 0]
+    #[calltable(variant_index = 0)]
     /// The public key of the initiator.
-    PublicKey(#[binary_index = 1] PublicKey),
-    #[binary_index = 1]
+    PublicKey(#[calltable(field_index = 1)] PublicKey),
+    #[calltable(variant_index = 1)]
     /// The account hash derived from the public key of the initiator.
-    AccountHash(#[binary_index = 1] AccountHash),
+    AccountHash(#[calltable(field_index = 1)] AccountHash),
 }
 
 impl InitiatorAddr {

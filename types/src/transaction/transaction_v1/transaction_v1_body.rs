@@ -50,15 +50,15 @@ use macros::{CalltableFromBytes, CalltableToBytes};
 )]
 #[derive(CalltableToBytes, CalltableFromBytes)]
 pub struct TransactionV1Body {
-    #[binary_index = 0]
+    #[calltable(field_index = 0)]
     pub(crate) args: RuntimeArgs,
-    #[binary_index = 1]
+    #[calltable(field_index = 1)]
     pub(crate) target: TransactionTarget,
-    #[binary_index = 2]
+    #[calltable(field_index = 2)]
     pub(crate) entry_point: TransactionEntryPoint,
-    #[binary_index = 3]
+    #[calltable(field_index = 3)]
     pub(crate) transaction_category: u8,
-    #[binary_index = 4]
+    #[calltable(field_index = 4)]
     pub(crate) scheduling: TransactionScheduling,
 }
 
@@ -476,7 +476,12 @@ impl Display for TransactionV1Body {
 mod tests {
     use super::*;
     use crate::runtime_args;
-
+    #[test]
+    fn xyz2() {
+        let rng = &mut TestRng::new();
+        let body = TransactionV1Body::random(rng);
+        bytesrepr::test_serialization_roundtrip(&body);
+    }
     #[test]
     fn bytesrepr_roundtrip() {
         let rng = &mut TestRng::new();

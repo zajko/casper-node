@@ -29,26 +29,26 @@ use serde::{Deserialize, Serialize};
 #[derive(CalltableToBytes, CalltableFromBytes)]
 pub enum TransactionTarget {
     /// The execution target is a native operation (e.g. a transfer).
-    #[binary_index = 0]
+    #[calltable(variant_index = 0)]
     Native,
     /// The execution target is a stored entity or package.
-    #[binary_index = 1]
+    #[calltable(variant_index = 1)]
     Stored {
         /// The identifier of the stored execution target.
-        #[binary_index = 1]
+        #[calltable(field_index = 1)]
         id: TransactionInvocationTarget,
         /// The execution runtime to use.
-        #[binary_index = 2]
+        #[calltable(field_index = 2)]
         runtime: TransactionRuntime,
     },
     /// The execution target is the included module bytes, i.e. compiled Wasm.
-    #[binary_index = 2]
+    #[calltable(variant_index = 2)]
     Session {
         /// The compiled Wasm.
-        #[binary_index = 1]
+        #[calltable(field_index = 1)]
         module_bytes: Bytes,
         /// The execution runtime to use.
-        #[binary_index = 2]
+        #[calltable(field_index = 2)]
         runtime: TransactionRuntime,
     },
 }

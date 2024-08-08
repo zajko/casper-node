@@ -33,14 +33,14 @@ use serde::{Deserialize, Serialize};
 #[derive(CalltableToBytes, CalltableFromBytes)]
 pub enum TransactionScheduling {
     /// No special scheduling applied.
-    #[binary_index = 0]
+    #[calltable(variant_index = 0)]
     Standard,
     /// Execution should be scheduled for the specified era.
-    #[binary_index = 1]
-    FutureEra(#[binary_index = 1] EraId),
+    #[calltable(variant_index = 1)]
+    FutureEra(#[calltable(field_index = 1)] EraId),
     /// Execution should be scheduled for the specified timestamp or later.
-    #[binary_index = 2]
-    FutureTimestamp(#[binary_index = 1] Timestamp),
+    #[calltable(field_index = 2)]
+    FutureTimestamp(#[calltable(field_index = 1)] Timestamp),
 }
 
 impl TransactionScheduling {
