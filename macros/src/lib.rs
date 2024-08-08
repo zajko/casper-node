@@ -1,6 +1,6 @@
+mod calltable_from_bytes;
+mod calltable_to_bytes;
 mod error;
-mod from_bytes;
-mod to_bytes;
 mod types;
 use proc_macro::TokenStream;
 use syn::{parse_macro_input, DeriveInput};
@@ -14,7 +14,14 @@ pub fn generate_to_bytes_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
     let data: syn::Data = input.data;
-    to_bytes::internal_derive_trait(struct_name, &data)
+
+    match calltable_to_bytes::internal_derive_trait(struct_name, &data) {
+        Err(parsing_error) => panic!(
+            "Error while applying CalltableToBytes derive to {}. {}",
+            struct_name, parsing_error
+        ),
+        Ok(token_stream) => return token_stream,
+    }
 }
 
 #[proc_macro_derive(CalltableFromBytes, attributes(calltable))]
@@ -22,5 +29,11 @@ pub fn generate_from_bytes_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
     let data: syn::Data = input.data;
-    from_bytes::internal_derive_trait(struct_name, &data)
+    match calltable_from_bytes::internal_derive_trait(struct_name, &data) {
+        Err(parsing_error) => panic!(
+            "Error while applying CalltableFromBytes derive to {}. {}",
+            struct_name, parsing_error
+        ),
+        Ok(token_stream) => return token_stream,
+    }
 }

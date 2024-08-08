@@ -229,72 +229,74 @@ fn parse_single_attribute(
     attribute_name: &str,
     field_name: &str,
 ) -> Result<IndexDataOfField, ParsingError> {
+    let build_malformed_err = || ParsingError::MalfrormedCalltableAttribute {
+        attribute_name: attribute_name.to_string(),
+        field_name: field_name.to_string(),
+        got: attr.to_token_stream().to_string(),
+    };
     if attr.path().is_ident(CALLTABLE_ATTRIBUTE) {
         let meta = &attr.meta;
         match meta {
             Meta::List(list) => {
                 let fetched_attributes = list
                     .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-                    .map_err(|e| ParsingError::MalfrormedCalltableAttribute {
-                        attribute_name: attribute_name.to_string(),
-                        field_name: field_name.to_string(),
-                        got: e.to_string(),
-                    })?;
+                    .map_err(|_| build_malformed_err())?;
                 if fetched_attributes.len() != 1 {
-                    return Err(ParsingError::MalfrormedCalltableAttribute {
-                        attribute_name: attribute_name.to_string(),
-                        field_name: field_name.to_string(),
-                        got: list.to_token_stream().to_string(),
-                    });
+                    return Err(build_malformed_err());
                 }
                 let meta = fetched_attributes.get(0).unwrap();
                 match meta {
-                    Meta::NameValue(nv) => match &nv.value {
-                        syn::Expr::Lit(lit) => match &lit.lit {
-                            syn::Lit::Str(s) if s.value() == "skip" => {
-                                Ok(IndexDataOfField::SkipBinarySerialization)
-                            }
-                            syn::Lit::Int(i) => {
-                                let v: u16 = i.base10_parse().map_err(|e| {
-                                    ParsingError::IndexValueNotU16 {
-                                        field_name: field_name.to_string(),
-                                        got: i.to_string(),
-                                        err: e.to_string(),
-                                    }
-                                })?;
-                                Ok(IndexDataOfField::BinaryIndex(v))
-                            }
-                            _ => Err(ParsingError::UnexpectedBinaryIndexDefinition {
-                                attribute_name: attribute_name.to_string(),
-                                field_name: field_name.to_string(),
-                                got: lit.into_token_stream().to_string(),
-                            }),
-                        },
-                        _ => Err(ParsingError::UnexpectedBinaryIndexDefinition {
-                            attribute_name: attribute_name.to_string(),
-                            field_name: field_name.to_string(),
-                            got: (&nv.value).into_token_stream().to_string(),
-                        }),
-                    },
-                    Meta::Path(path) if path.is_ident("skip") => {
-                        path.segments.len();
-                        Ok(IndexDataOfField::SkipBinarySerialization)
+                    Meta::NameValue(nv) if nv.path.is_ident(attribute_name) => {
+                        get_index_from_name_value(nv, field_name, attribute_name)
                     }
-                    _ => Err(ParsingError::MalfrormedCalltableAttribute {
-                        attribute_name: attribute_name.to_string(),
-                        field_name: field_name.to_string(),
-                        got: list.to_token_stream().to_string(),
-                    }),
+                    Meta::Path(path) if path.is_ident("skip") => {
+                        if path.segments.len() == 1 {
+                            Ok(IndexDataOfField::SkipBinarySerialization)
+                        } else {
+                            Err(build_malformed_err())
+                        }
+                    }
+                    _ => Err(build_malformed_err()),
                 }
             }
-            _ => Err(ParsingError::MalfrormedCalltableAttribute {
-                attribute_name: attribute_name.to_string(),
-                field_name: field_name.to_string(),
-                got: attr.to_token_stream().to_string(),
-            }),
+            _ => Err(build_malformed_err()),
         }
     } else {
         Ok(IndexDataOfField::NoIndexData)
+    }
+}
+
+fn get_index_from_name_value(
+    name_value: &syn::MetaNameValue,
+    field_name: &str,
+    attribute_name: &str,
+) -> Result<IndexDataOfField, ParsingError> {
+    match &name_value.value {
+        syn::Expr::Lit(lit) => match &lit.lit {
+            syn::Lit::Str(s) if s.value() == "skip" => {
+                Ok(IndexDataOfField::SkipBinarySerialization)
+            }
+            syn::Lit::Int(i) => {
+                let v: u16 = i
+                    .base10_parse()
+                    .map_err(|e| ParsingError::IndexValueNotU16 {
+                        field_name: field_name.to_string(),
+                        got: i.to_string(),
+                        err: e.to_string(),
+                    })?;
+                Ok(IndexDataOfField::BinaryIndex(v))
+            }
+            _ => Err(ParsingError::UnexpectedBinaryIndexDefinition {
+                attribute_name: attribute_name.to_string(),
+                field_name: field_name.to_string(),
+                got: lit.into_token_stream().to_string(),
+            }),
+        },
+        _ => Err(ParsingError::UnexpectedBinaryIndexDefinition {
+            attribute_name: attribute_name.to_string(),
+            field_name: field_name.to_string(),
+            got: (&name_value.value).into_token_stream().to_string(),
+        }),
     }
 }
 
@@ -382,9 +384,8 @@ mod tests {
         let attr: Attribute = parse_quote! {
             #[calltable(skip = 1)]
         };
-        let a = parse_single_attribute(&attr, "field_index", "xyz");
         assert!(matches!(
-            a,
+            parse_single_attribute(&attr, "field_index", "xyz"),
             Err(ParsingError::MalfrormedCalltableAttribute { .. })
         ));
 

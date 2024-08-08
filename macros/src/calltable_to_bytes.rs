@@ -3,20 +3,20 @@ use quote::quote;
 use std::collections::BTreeMap;
 use syn::{Data, Ident};
 
-use crate::types::{
-    build_type_description, validate_enum_variants, validate_struct_fields, EnumVariant,
-    FieldDefinitions,
+use crate::{
+    error::ParsingError,
+    types::{
+        build_type_description, validate_enum_variants, validate_struct_fields, EnumVariant,
+        FieldDefinitions,
+    },
 };
 
-pub fn internal_derive_trait(struct_name: &Ident, data: &Data) -> proc_macro::TokenStream {
-    let maybe_type_description = build_type_description(data);
-    let type_description = match maybe_type_description {
-        Err(parsing_error) => panic!(
-            "Error while applying Calltable derive to {}. {}",
-            struct_name, parsing_error
-        ),
-        Ok(binary_indexes) => binary_indexes,
-    };
+pub fn internal_derive_trait(
+    struct_name: &Ident,
+    data: &Data,
+) -> Result<proc_macro::TokenStream, ParsingError> {
+    let type_description = build_type_description(data)?;
+
     let (serialization_length_method, serialization_method) = match type_description {
         crate::types::TypeDescription::Struct(field_definitions) => {
             if let Err(e) = validate_struct_fields(struct_name.to_string(), &field_definitions) {
@@ -54,7 +54,7 @@ pub fn internal_derive_trait(struct_name: &Ident, data: &Data) -> proc_macro::To
         }
     };
 
-    proc_macro::TokenStream::from(expanded)
+    Ok(proc_macro::TokenStream::from(expanded))
 }
 
 fn destructure_arg_list(field_definitions: &FieldDefinitions) -> TokenStream {

@@ -54,6 +54,9 @@ pub(crate) enum ParsingError {
         found_indexes: Vec<u16>,
         expected_indexes: Vec<u16>,
     },
+    Freeform {
+        message: String,
+    },
 }
 
 impl Display for ParsingError {
@@ -152,6 +155,7 @@ impl Display for ParsingError {
                 attribute_name,
                 got
             ),
+            ParsingError::Freeform { message } => write!(formatter, "Freeform error {}", message),
         }
     }
 }
