@@ -26,7 +26,6 @@ mod access_rights;
 pub mod account;
 pub mod addressable_entity;
 pub mod api_error;
-mod auction_state;
 mod block;
 mod block_time;
 mod byte_code;
@@ -94,7 +93,6 @@ pub use addressable_entity::{
 };
 #[doc(inline)]
 pub use api_error::ApiError;
-pub use auction_state::{AuctionState, JsonEraValidators, JsonValidatorWeights};
 #[cfg(all(feature = "std", feature = "json-schema"))]
 pub use block::JsonBlockWithSignatures;
 pub use block::{

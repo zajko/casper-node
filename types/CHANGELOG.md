@@ -210,7 +210,6 @@ All notable changes to this project will be documented in this file. The format 
 ### Changed
 
 - pub enum ApiError has new variants: MessageTopicAlreadyRegistered, MaxTopicsNumberExceeded, MaxTopicNameSizeExceeded, MessageTopicNotRegistered, MessageTopicFull, MessageTooLarge, MaxMessagesPerBlockExceeded,NotAllowedToAddContractVersion,InvalidDelegationAmountLimits,InvalidCallerInfoRequest
-- struct AuctionState#bids is now a BTreeMap<PublicKey, Bid> instead of Vec<JsonBids>. This field is still serialized as an array. Due to this change the elements of the array will have more fields than before (added `validator_public_key`, `vesting_schedule`).
 - Variants of enum EntryPointType changed
 - Struct Parameter moved from contracts to addressable_entity::entry_points
 - struct EraId has new methods `iter_range_inclusive`, `increment`
