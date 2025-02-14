@@ -10,15 +10,14 @@ use datasize::DataSize;
 use itertools::Itertools;
 use num_rational::Ratio;
 use serde::Serialize;
-use static_assertions::const_assert;
 use tracing::info;
 
 use casper_types::{
     BlockHeaderV2, ChainNameDigest, EraId, FinalitySignatureV2, PublicKey, SecretKey, U512,
 };
 
-const MAX_VALIDATOR_MATRIX_ENTRIES: usize = 8;
-const_assert!(MAX_VALIDATOR_MATRIX_ENTRIES % 2 == 0);
+const MINIMUM_CUSP_ERA_COUNT: u64 = 2;
+const PROPOSED_BLOCK_ERA_TOLERANCE: u64 = 1;
 
 #[derive(Eq, PartialEq, Debug, Copy, Clone, DataSize)]
 pub(crate) enum SignatureWeight {
@@ -51,10 +50,12 @@ pub(crate) struct ValidatorMatrix {
     secret_signing_key: Arc<SecretKey>,
     public_signing_key: PublicKey,
     auction_delay: u64,
+    signature_rewards_max_delay: u64,
     retrograde_latch: Option<EraId>,
 }
 
 impl ValidatorMatrix {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         finality_threshold_fraction: Ratio<u64>,
         chainspec_name_hash: ChainNameDigest,
@@ -63,6 +64,7 @@ impl ValidatorMatrix {
         secret_signing_key: Arc<SecretKey>,
         public_signing_key: PublicKey,
         auction_delay: u64,
+        signature_rewards_max_delay: u64,
     ) -> Self {
         let inner = Arc::new(RwLock::new(BTreeMap::new()));
         ValidatorMatrix {
@@ -74,6 +76,7 @@ impl ValidatorMatrix {
             secret_signing_key,
             public_signing_key,
             auction_delay,
+            signature_rewards_max_delay,
             retrograde_latch: None,
         }
     }
@@ -98,6 +101,7 @@ impl ValidatorMatrix {
             public_signing_key,
             secret_signing_key,
             auction_delay: 1,
+            signature_rewards_max_delay: 3,
             retrograde_latch: None,
         }
     }
@@ -128,8 +132,19 @@ impl ValidatorMatrix {
             public_signing_key,
             secret_signing_key,
             auction_delay: 1,
+            signature_rewards_max_delay: 3,
             retrograde_latch: None,
         }
+    }
+
+    /// Sets signature_rewards_max_delay to imputed value.
+    #[cfg(test)]
+    pub(crate) fn with_signature_rewards_max_delay(
+        mut self,
+        signature_rewards_max_delay: u64,
+    ) -> Self {
+        self.signature_rewards_max_delay = signature_rewards_max_delay;
+        self
     }
 
     #[cfg(test)]
@@ -151,7 +166,7 @@ impl ValidatorMatrix {
     // When the chain starts, the validator weights will be the same until the unbonding delay is
     // elapsed. This allows us to possibly infer the weights of other eras if the era registered is
     // within the unbonding delay.
-    // Currently we only infer the validator weights for era 0 from the set registered for era 1.
+    // Currently, we only infer the validator weights for era 0 from the set registered for era 1.
     // This is needed for the case where we want to sync leap to a block in era 0 of a pre 1.5.0
     // network for which we cant get the validator weights from a switch block.
     pub(crate) fn register_era_validator_weights(
@@ -184,15 +199,12 @@ impl ValidatorMatrix {
             return is_new;
         };
 
+        let nth = self.cache_tail_max_len();
+        // avoid multiplication
+        let excess_entry_count = guard.len().saturating_sub(nth).saturating_sub(nth);
         let mut removed = false;
-        let excess_entry_count = guard.len().saturating_sub(MAX_VALIDATOR_MATRIX_ENTRIES);
         for _ in 0..excess_entry_count {
-            let median_era = guard
-                .keys()
-                .rev()
-                .nth(MAX_VALIDATOR_MATRIX_ENTRIES / 2)
-                .copied()
-                .unwrap();
+            let median_era = guard.keys().rev().nth(nth).copied().unwrap();
             if median_era <= latch_era {
                 break;
             } else {
@@ -335,6 +347,23 @@ impl ValidatorMatrix {
     pub(crate) fn purge_era_validators(&mut self, era_id: &EraId) {
         self.inner.write().unwrap().remove(era_id);
     }
+
+    fn cache_head_max_len(&self) -> usize {
+        MINIMUM_CUSP_ERA_COUNT.saturating_add(self.auction_delay) as usize
+    }
+
+    fn cache_tail_max_len(&self) -> usize {
+        let min_plus_auction_delay = self.cache_head_max_len();
+        let signature_rewards_max_delay =
+            self.signature_rewards_max_delay
+                .saturating_add(PROPOSED_BLOCK_ERA_TOLERANCE) as usize;
+        min_plus_auction_delay.max(signature_rewards_max_delay)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn entries_max(&self) -> usize {
+        self.cache_tail_max_len() * 2
+    }
 }
 
 impl Debug for ValidatorMatrix {
@@ -470,7 +499,7 @@ mod tests {
         components::consensus::tests::utils::{
             ALICE_PUBLIC_KEY, ALICE_SECRET_KEY, BOB_PUBLIC_KEY, CAROL_PUBLIC_KEY,
         },
-        types::{validator_matrix::MAX_VALIDATOR_MATRIX_ENTRIES, SignatureWeight},
+        types::SignatureWeight,
     };
 
     use super::{EraValidatorWeights, ValidatorMatrix};
@@ -588,14 +617,16 @@ mod tests {
         // Create a validator matrix and saturate it with entries.
         let mut validator_matrix = ValidatorMatrix::new_with_validator(ALICE_SECRET_KEY.clone());
         let mut era_validator_weights = vec![validator_matrix.validator_weights(0.into()).unwrap()];
+
+        let entries_max = validator_matrix.entries_max();
         era_validator_weights.extend(
-            (1..MAX_VALIDATOR_MATRIX_ENTRIES as u64)
+            (1..entries_max as u64)
                 .map(EraId::from)
                 .map(empty_era_validator_weights),
         );
         for evw in era_validator_weights
             .iter()
-            .take(MAX_VALIDATOR_MATRIX_ENTRIES)
+            .take(entries_max)
             .skip(1)
             .cloned()
         {
@@ -604,52 +635,48 @@ mod tests {
                 "register_era_validator_weights"
             );
         }
-        // For a `MAX_VALIDATOR_MATRIX_ENTRIES` value of 6, the validator
-        // matrix should contain eras 0 through 5 inclusive.
-        assert_eq!(
-            vec![0u64, 1, 2, 3, 4, 5],
-            validator_matrix
-                .read_inner()
-                .keys()
-                .copied()
-                .map(EraId::value)
-                .collect::<Vec<u64>>()
-        );
+        let actual = validator_matrix
+            .read_inner()
+            .keys()
+            .copied()
+            .map(EraId::value)
+            .collect::<Vec<u64>>();
+        // For a `entries_max` value of 8, the validator
+        // matrix should contain eras 0 through 7 inclusive.
+        assert_eq!(vec![0u64, 1, 2, 3, 4, 5, 6, 7], actual);
 
         // Now that we have 6 entries in the validator matrix, try adding more.
         // We should have an entry for era 3 (we have eras 0 through 5
         // inclusive).
-        let median = MAX_VALIDATOR_MATRIX_ENTRIES as u64 / 2;
+        let median = entries_max as u64 / 2;
         assert!(
-            validator_matrix.has_era(&(median).into()),
+            validator_matrix.has_era(&median.into()),
             "should have median era {}",
             median
         );
         // Add era 7, which would be the 7th entry in the matrix. Skipping era
         // 6 should have no effect on the pruning.
-        era_validator_weights.push(empty_era_validator_weights(
-            (MAX_VALIDATOR_MATRIX_ENTRIES as u64 + 1).into(),
-        ));
+        era_validator_weights.push(empty_era_validator_weights((entries_max as u64 + 1).into()));
 
-        // set retrograde latch to simulate a fully sync'd node
+        // set retrograde latch to simulate a fully synced node
         validator_matrix.register_retrograde_latch(Some(EraId::new(0)));
 
-        // Now the entry for era 3 should be dropped and we should be left with
-        // the 3 lowest eras [0, 1, 2] and 3 highest eras [4, 5, 7].
+        // Now the entry for era 3 should be dropped, and we should be left with
+        // the 4 lowest eras [0, 1, 2, 3] and 4 highest eras [5, 6, 7, 9].
         assert!(validator_matrix
             .register_era_validator_weights(era_validator_weights.last().cloned().unwrap()));
         assert!(
-            !validator_matrix.has_era(&(median).into()),
+            !validator_matrix.has_era(&median.into()),
             "should not have median era {}",
             median
         );
         let len = validator_matrix.read_inner().len();
         assert_eq!(
-            len, MAX_VALIDATOR_MATRIX_ENTRIES,
+            len, entries_max,
             "expected entries {} actual entries: {}",
-            MAX_VALIDATOR_MATRIX_ENTRIES, len
+            entries_max, len
         );
-        let expected = vec![0u64, 1, 2, 4, 5, 7];
+        let expected = vec![0u64, 1, 2, 3, 5, 6, 7, 9];
         let actual = validator_matrix
             .read_inner()
             .keys()
@@ -674,20 +701,27 @@ mod tests {
 
     #[test]
     fn register_validator_weights_latched_pruning() {
+        // TODO: write a version of this test that is not hardcoded with so many assumptions about
+        // the internal state of the matrix. The replacement test should dynamically
+        // determine the range and misc idx and count variables rather than hard coding
+        // them.
+
         // Create a validator matrix and saturate it with entries.
-        let mut validator_matrix = ValidatorMatrix::new_with_validator(ALICE_SECRET_KEY.clone());
+        let mut validator_matrix = ValidatorMatrix::new_with_validator(ALICE_SECRET_KEY.clone())
+            .with_signature_rewards_max_delay(2);
         // Set the retrograde latch to 10 so we can register all eras lower or
         // equal to 10.
+        let entries_max = validator_matrix.entries_max();
         validator_matrix.register_retrograde_latch(Some(EraId::from(10)));
         let mut era_validator_weights = vec![validator_matrix.validator_weights(0.into()).unwrap()];
         era_validator_weights.extend(
-            (1..=MAX_VALIDATOR_MATRIX_ENTRIES as u64)
+            (1..=entries_max as u64)
                 .map(EraId::from)
                 .map(empty_era_validator_weights),
         );
         for evw in era_validator_weights
             .iter()
-            .take(MAX_VALIDATOR_MATRIX_ENTRIES + 1)
+            .take(entries_max + 1)
             .skip(1)
             .cloned()
         {
@@ -718,7 +752,7 @@ mod tests {
             "register_era_validator_weights"
         );
         // The latch was previously set to 5, so now all weights which are
-        // neither the lowest 3, highest 3 or higher than the latched era
+        // neither the lowest 3, highest 3, or higher than the latched era
         // should have been purged.
         // Given we had weights [0, ..., 10] and the latch is 5, we should
         // be left with [0, 1, 2, 3, 4, 5, 8, 9, 10].
@@ -755,7 +789,7 @@ mod tests {
             "register_era_validator_weights"
         );
         // The latch was previously set to 1, so now all weights which are
-        // neither the lowest 3, highest 3 or higher than the latched era
+        // neither the lowest 3, highest 3, or higher than the latched era
         // should have been purged.
         // Given we had weights [0, 1, 2, 3, 4, 5, 6, 8, 9, 10] and the latch
         // is 1, we should be left with [0, 1, 2, 8, 9, 10].

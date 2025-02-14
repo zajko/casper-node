@@ -466,6 +466,7 @@ mod tests {
                 Arc::new(secret_key),
                 consensus_key.clone(),
                 2,
+                3,
             ),
         );
 

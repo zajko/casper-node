@@ -1105,6 +1105,7 @@ impl reactor::Reactor for MainReactor {
             our_secret_key.clone(),
             our_public_key.clone(),
             chainspec.core_config.auction_delay,
+            chainspec.core_config.signature_rewards_max_delay,
         );
 
         let storage_config = WithDir::new(&root_dir, config.storage.clone());

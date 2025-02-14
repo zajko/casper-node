@@ -151,6 +151,7 @@ impl TestEnv {
             self.validator_keys[0].clone(),
             PublicKey::from(self.validator_keys[0].as_ref()),
             1,
+            3,
         );
         validator_matrix.register_validator_weights(self.block.era_id(), validator_weights);
 
