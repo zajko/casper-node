@@ -68,11 +68,10 @@ pub(crate) enum FunctionIndex {
     CallPackageVersion,
 }
 
-impl From<FunctionIndex> for usize {
-    fn from(index: FunctionIndex) -> usize {
-        // NOTE: This can't fail as `FunctionIndex` is represented by usize,
-        // so this serves mostly as a syntax sugar.
-        index.to_usize().unwrap()
+impl TryFrom<FunctionIndex> for usize {
+    type Error = FunctionIndex;
+    fn try_from(value: FunctionIndex) -> Result<Self, Self::Error> {
+        value.to_usize().ok_or(value)
     }
 }
 

@@ -1,10 +1,13 @@
 //! Cryptography module containing hashing functions used internally
 //! by the execution engine
 
+use std::fmt::{Display, Formatter, Result as DisplayResult};
+
 use blake2::{
     digest::{Update, VariableOutput},
     Blake2bVar,
 };
+use casper_wasmi::HostError;
 use keccak_asm::Digest as KeccakDigest;
 use sha2::Sha256;
 
@@ -12,11 +15,27 @@ use sha2::Sha256;
 /// All hash functions in this module have a digest length of 32.
 pub const DIGEST_LENGTH: usize = 32;
 
+#[derive(Debug)]
+pub enum CryptographyError {
+    InvalidOutputSize,
+}
+
+impl Display for CryptographyError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> DisplayResult {
+        match self {
+            CryptographyError::InvalidOutputSize => write!(f, "invalid output size"),
+        }
+    }
+}
+
+impl HostError for CryptographyError {}
+
 /// The 32-byte digest blake2b hash function
-pub fn blake2b<T: AsRef<[u8]>>(data: T) -> [u8; DIGEST_LENGTH] {
+pub fn blake2b<T: AsRef<[u8]>>(data: T) -> Result<[u8; DIGEST_LENGTH], CryptographyError> {
     let mut result = [0; DIGEST_LENGTH];
     // NOTE: Assumed safe as `BLAKE2B_DIGEST_LENGTH` is a valid value for a hasher
-    let mut hasher = Blake2bVar::new(DIGEST_LENGTH).expect("should create hasher");
+    let mut hasher =
+        Blake2bVar::new(DIGEST_LENGTH).map_err(|_| CryptographyError::InvalidOutputSize)?;
 
     hasher.update(data.as_ref());
 

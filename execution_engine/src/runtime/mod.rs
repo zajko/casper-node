@@ -14,11 +14,12 @@ use std::{
     cmp,
     collections::{BTreeMap, BTreeSet},
     convert::{TryFrom, TryInto},
+    fmt,
     iter::FromIterator,
 };
 
 use casper_wasm::elements::Module;
-use casper_wasmi::{MemoryRef, Trap, TrapCode};
+use casper_wasmi::{HostError, MemoryRef, Trap, TrapCode};
 use tracing::{debug, error, warn};
 
 #[cfg(feature = "test-support")]
@@ -98,6 +99,31 @@ enum CallContractIdentifier {
     },
 }
 
+#[derive(Debug)]
+enum HostRuntimeTrap {
+    LoadKeyKeyTooLong(usize),
+    GetNamedArgWrongLength(usize)
+}
+
+impl HostError for HostRuntimeTrap {};
+
+impl fmt::Display for HostRuntimeTrap {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            HostRuntimeTrap::LoadKeyKeyTooLong(key_bytes) => write!(
+                f,
+                "LoadKeyError::KeyTooLong, number_of_key_bytes={}",
+                key_bytes
+            ),
+            HostRuntimeTrap::GetNamedArgWrongLength(key_bytes) => write!(
+                f,
+                "LoadKeyError::GetNamedArgWrongLength, number_of_key_bytes={}",
+                key_bytes
+            ),
+        }
+    }
+}
+
 #[repr(u8)]
 enum CallerInformation {
     Initiator = 0,
@@ -151,16 +177,16 @@ where
         module: Module,
         memory: MemoryRef,
         stack: RuntimeStack,
-    ) -> Self {
-        Self::check_preconditions(&stack);
-        Runtime {
+    ) -> Result<Self, &'static str> {
+        Self::check_preconditions(&stack)?;
+        Ok(Runtime {
             context,
             memory: Some(memory),
             module: Some(module),
             host_buffer: None,
             stack: Some(stack),
             host_function_flag: self.host_function_flag.clone(),
-        }
+        })
     }
 
     /// Creates a new runtime instance with a stack from `self`.
@@ -168,29 +194,29 @@ where
         &self,
         context: RuntimeContext<'a, R>,
         stack: RuntimeStack,
-    ) -> Self {
-        Self::check_preconditions(&stack);
-        Runtime {
+    ) -> Result<Self, &'static str> {
+        Self::check_preconditions(&stack)?;
+        Ok(Runtime {
             context,
             memory: None,
             module: None,
             host_buffer: None,
             stack: Some(stack),
             host_function_flag: self.host_function_flag.clone(),
-        }
+        })
     }
 
     /// Preconditions that would render the system inconsistent if violated. Those are strictly
     /// programming errors.
-    fn check_preconditions(stack: &RuntimeStack) {
-        if stack.is_empty() {
-            error!("Call stack should not be empty while creating a new Runtime instance");
-            debug_assert!(false);
-        }
-
-        if stack.first_frame().unwrap().contract_hash().is_some() {
-            error!("First element of the call stack should always represent a Session call");
-            debug_assert!(false);
+    fn check_preconditions(stack: &RuntimeStack) -> Result<(), &'static str> {
+        if let Some(stack_element) = stack.first_frame() {
+            if stack_element.contract_hash().is_some() {
+                Err("First element of the call stack should always represent a Session call")
+            } else {
+                Ok(())
+            }
+        } else {
+            Err("Call stack should not be empty while creating a new Runtime instance")
         }
     }
 
@@ -357,7 +383,7 @@ where
         let bytes_size: u32 = key_bytes
             .len()
             .try_into()
-            .expect("Keys should not serialize to many bytes");
+            .map_err(|_| Trap::Host(Box::new(HostRuntimeTrap::LoadKeyKeyTooLong(key_bytes.len()))))?;
         let size_bytes = bytes_size.to_le_bytes(); // Wasm is little-endian
         if let Err(error) = self.try_get_memory()?.set(bytes_written_ptr, &size_bytes) {
             return Err(ExecError::Interpreter(error.into()).into());
@@ -1427,7 +1453,7 @@ where
                 .runtime_footprint()
                 .borrow()
                 .main_purse()
-                .expect("line 1183")
+                .ok_or(ExecError::MainPurseForEntityNotFound)?
                 .addr(),
             AccessRights::WRITE,
         )?);
@@ -1550,10 +1576,6 @@ where
             }
         }
 
-        if possible_versions.is_empty() {
-            return Err(ExecError::NoMatchingEntityVersionKey);
-        }
-
         if possible_versions.len() > 1
             && self
                 .context
@@ -1569,9 +1591,11 @@ where
         // correctly pop the singular element in the possible versions.
         // This sort is load bearing.
         possible_versions.sort();
-        // This unwrap is safe as long as we exit early on possible versions being empty
-        let entity_version_key = possible_versions.pop().unwrap();
-        Ok(entity_version_key)
+        if let Some(possible_version) = possible_versions.pop() {
+            Ok(possible_version)
+        } else {
+            Err(ExecError::NoMatchingEntityVersionKey)
+        }
     }
 
     fn get_key_from_entity_addr(&self, entity_addr: EntityAddr) -> Key {
@@ -1966,7 +1990,7 @@ where
                     .runtime_footprint()
                     .borrow()
                     .main_purse()
-                    .expect("need purse for attenuation")
+                    .ok_or(ExecError::MainPurseForEntityNotFound)?
                     .addr(),
                 AccessRights::WRITE,
             )?
@@ -4026,7 +4050,7 @@ where
         let bytes_written: u32 = sliced_buf
             .len()
             .try_into()
-            .expect("Size of buffer should fit within limit");
+            .map_err(|_| ExecError::TypeCast("Size of buffer should fit within limit"))?;
         let bytes_written_data = bytes_written.to_le_bytes();
 
         if let Err(error) = self
@@ -4060,11 +4084,14 @@ where
                 return Ok(Err(ApiError::OutOfMemory));
             }
             Some(arg) => {
-                // SAFETY: Safe to unwrap as we asserted length above
-                arg.inner_bytes()
-                    .len()
+                let len = arg.inner_bytes()
+                    .len();
+                len
                     .try_into()
-                    .expect("Should fit within the range")
+                    .map_err(|_| {
+                        // SAFETY: this should never happen since we just checkec the length
+                        Trap::Host(Box::new(HostRuntimeTrap::GetNamedArgWrongLength(len)))
+                    })?
             }
             None => return Ok(Err(ApiError::MissingArgument)),
         };

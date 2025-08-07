@@ -1091,8 +1091,8 @@ where
                 )?;
                 let digest =
                     self.checked_memory_slice(in_ptr as usize, in_size as usize, |input| {
-                        cryptography::blake2b(input)
-                    })?;
+                        cryptography::blake2b(input).map_err(|e| Trap::Host(Box::new(e)))
+                    })??;
 
                 let result = if digest.len() != out_size as usize {
                     Err(ApiError::BufferTooSmall)
@@ -1405,12 +1405,14 @@ where
                 let digest =
                     self.checked_memory_slice(in_ptr as usize, in_size as usize, |input| {
                         match hash_algo_type {
-                            HashAlgorithm::Blake2b => cryptography::blake2b(input),
-                            HashAlgorithm::Blake3 => cryptography::blake3(input),
-                            HashAlgorithm::Sha256 => cryptography::sha256(input),
-                            HashAlgorithm::Keccak256 => cryptography::keccak256(input),
+                            HashAlgorithm::Blake2b => {
+                                cryptography::blake2b(input).map_err(|e| Trap::Host(Box::new(e)))
+                            }
+                            HashAlgorithm::Blake3 => Ok(cryptography::blake3(input)),
+                            HashAlgorithm::Sha256 => Ok(cryptography::sha256(input)),
+                            HashAlgorithm::Keccak256 => Ok(cryptography::keccak256(input)),
                         }
-                    })?;
+                    })??;
 
                 let result = if digest.len() > out_size as usize {
                     Err(ApiError::BufferTooSmall)
