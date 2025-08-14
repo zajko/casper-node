@@ -17,10 +17,10 @@ use casper_types::{
     },
     AddressableEntityHash, ApiError, EntityVersion, Gas, Group, HashAlgorithm, HostFunction,
     HostFunctionCost, Key, PackageHash, PackageStatus, PublicKey, Signature, StoredValue, URef,
-    U512, UREF_SERIALIZED_LENGTH,
+    U256, U512, UREF_SERIALIZED_LENGTH,
 };
 
-use super::{args::Args, ExecError, Runtime};
+use super::{args::Args, builtins, ExecError, Runtime};
 use crate::{resolvers::v1_function_index::FunctionIndex, runtime::cryptography};
 
 impl<R> Externals for Runtime<'_, R>

@@ -1,5 +1,9 @@
+mod altbn128; 
+
 use std::{borrow::Cow, num::NonZeroU32, sync::Arc};
 
+use altbn128::point_from_coords;
+use bn::AffineG1;
 use bytes::Bytes;
 use casper_executor_wasm_common::{
     chain_utils,
@@ -37,7 +41,7 @@ use casper_types::{
     ByteCodeKind, CLType, CLValue, ContractRuntimeTag, Digest, EntityAddr, EntityEntryPoint,
     EntityKind, EntryPointAccess, EntryPointAddr, EntryPointPayment, EntryPointType,
     EntryPointValue, HashAddr, HashAlgorithm, HostFunctionV2, Key, Package, PackageHash,
-    ProtocolVersion, StoredValue, URef, U512,
+    ProtocolVersion, StoredValue, URef, U256, U512,
 };
 use either::Either;
 use num_derive::FromPrimitive;
@@ -1897,4 +1901,135 @@ pub fn casper_generic_hash<S: GlobalStateReader, E: Executor>(
     caller.memory_write(out_ptr, &hashed_bytes)?;
 
     Ok(HOST_ERROR_SUCCESS)
+}
+
+/// Adds two points on the alt_bn128 elliptic curve.
+///
+/// This function performs the addition of two points on the alt_bn128 elliptic curve and stores
+/// the result in the provided pointers.
+///
+/// # Parameters
+///
+/// - `x1_ptr`: A pointer to the x-coordinate of the first point.
+/// - `y1_ptr`: A pointer to the y-coordinate of the first point.
+/// - `x2_ptr`: A pointer to the x-coordinate of the second point.
+/// - `y2_ptr`: A pointer to the y-coordinate of the second point.
+/// - `result_x_ptr`: A mutable pointer to store the x-coordinate of the resulting point.
+/// - `result_y_ptr`: A mutable pointer to store the y-coordinate of the resulting point.
+///
+/// # Returns
+///
+/// - `0` if the addition was successful.
+/// - `1` if the X is an invalid coordinate.
+/// - `2` if the Y is an invalid coordinate.
+/// - `3` if the point is not on a curve.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers. Ensure that the pointers are
+/// valid and properly aligned before calling this function.
+pub fn casper_alt_bn128_add<S: GlobalStateReader, E: Executor>(
+    mut caller: impl Caller<Context = Context<S, E>>,
+    x1_ptr: u32,
+    y1_ptr: u32,
+    x2_ptr: u32,
+    y2_ptr: u32,
+    result_x_ptr: u32,
+    result_y_ptr: u32,
+) -> VMResult<u32> {
+    // Charge for parameter weights.
+    let alt_bn128_add_host_function = caller.context().config.host_function_costs().alt_bn128_add;
+
+    charge_host_function_call(
+        &mut caller, 
+                    &alt_bn128_add_host_function,
+                    [u64::from(x1_ptr), u64::from(y1_ptr), u64::from(x2_ptr), u64::from(y2_ptr), u64::from(result_x_ptr), u64::from(result_y_ptr)],
+                )?;
+
+     let x1: Vec<u8> = caller.memory_read(x1_ptr, 32)?;
+                let y1: Vec<u8> = caller.memory_read(y1_ptr, 32)?;
+                let x2: Vec<u8> = caller.memory_read(x2_ptr, 32)?;
+                let y2: Vec<u8> = caller.memory_read(y2_ptr, 32)?;
+
+                let x1: U256 = U256::from_little_endian(&x1);
+                let y1: U256 = U256::from_little_endian(&y1);
+                let x2: U256 = U256::from_little_endian(&x2);
+                let y2: U256 = U256::from_little_endian(&y2);
+                
+    let p1 = point_from_coords(x1, y1)?;
+    let p2 = point_from_coords(x2, y2)?;
+
+    let mut x = U256::zero();
+    let mut y = U256::zero();
+
+    if let Some(sum) = AffineG1::from_jacobian(p1 + p2) {
+        x = fq_to_u256(sum.x());
+        y = fq_to_u256(sum.y());
+    }
+
+    Ok((x, y))
+    todo!()
+}
+
+/// Multiplies a point on the alt_bn128 elliptic curve by a scalar.
+///
+/// This function performs scalar multiplication of a point on the alt_bn128 elliptic curve and
+/// stores the result in the provided pointers.
+///
+/// # Parameters
+///
+/// - `x_ptr`: A pointer to the x-coordinate of the point.
+/// - `y_ptr`: A pointer to the y-coordinate of the point.
+/// - `scalar_ptr`: A pointer to the scalar value.
+/// - `result_x_ptr`: A mutable pointer to store the x-coordinate of the resulting point.
+/// - `result_y_ptr`: A mutable pointer to store the y-coordinate of the resulting point.
+///
+/// # Returns
+///
+/// - `0` if the multiplication was successful.
+/// - A non-zero integer if there was an error.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers. Ensure that the pointers are
+/// valid and properly aligned before calling this function.
+pub fn casper_alt_bn128_mul(
+    x_ptr: u32,
+    y_ptr: u32,
+    scalar_ptr: u32,
+    result_x_ptr: u32,
+    result_y_ptr: u32,
+) -> i32 {
+    todo!()
+}
+
+/// Performs a pairing check on the alt_bn128 elliptic curve.
+///
+/// This function performs a pairing check on the alt_bn128 elliptic curve using the provided
+/// elements and stores the result in the provided pointer.
+///
+/// # Parameters
+///
+/// - `elements_ptr`: A pointer to the elements to be checked. This should be pointed at byte
+///   array of multiple of 6 elements representing (ax, ay, bax, bay, bbx, bby). Each point is
+///   32 bytes long.
+/// - `elements_size`: The size of the elements in bytes.
+/// - `result_ptr`: A mutable pointer to store the result of the pairing check. The result will
+///   be `1` if the pairing check is successful, and `0` otherwise.
+///
+/// # Returns
+///
+/// - `0` if the pairing check was successful.
+/// - A non-zero integer if there was an error.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers. Ensure that the pointers are
+/// valid and properly aligned before calling this function.
+pub fn casper_alt_bn128_pairing(
+    elements_ptr: u32,
+    elements_size: u32
+    result_ptr: u32,
+) -> u32 {
+    todo!()
 }

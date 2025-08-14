@@ -68,6 +68,9 @@ macro_rules! for_each_host_function {
             pub fn casper_transfer(entity_addr_ptr: *const u8, entity_addr_len: usize, amount: *const core::ffi::c_void,) -> u32;
             pub fn casper_emit(topic_ptr: *const u8, topic_size: usize, payload_ptr: *const u8, payload_size: usize,) -> u32;
             pub fn casper_generic_hash(in_ptr: *const u8, in_size: usize, out_ptr: *const u8, hash_algorithm: usize,) -> u32;
+            pub fn casper_alt_bn128_add(x1_ptr: *const u8, y1_ptr: *const u8, x2_ptr: *const u8, y2_ptr: *const u8, result_x_ptr: *mut u8, result_y_ptr: *mut u8,) -> i32;
+            pub fn casper_alt_bn128_mul(x_ptr: *const u8, y_ptr: *const u8, scalar_ptr: *const u8, result_x_ptr: *mut u8, result_y_ptr: *mut u8,) -> i32;
+            pub fn casper_alt_bn128_pairing(elements_ptr: *const core::ffi::c_void, elements_size: usize, result_ptr: *mut i32,) -> i32;
         }
     };
 }

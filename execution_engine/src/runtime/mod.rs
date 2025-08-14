@@ -1,6 +1,7 @@
 //! This module contains executor state of the WASM code.
 mod args;
 mod auction_internal;
+pub mod builtins;
 pub mod cryptography;
 mod externals;
 mod handle_payment_internal;
