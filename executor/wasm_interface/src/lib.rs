@@ -11,7 +11,6 @@ use casper_executor_wasm_common::{
     flags::ReturnFlags,
 };
 use casper_types::bytesrepr::Error as BytesreprError;
-use serde::Serialize;
 
 #[cfg(test)]
 pub use sandboxed_execution::SandboxedExecutionRequestBuilder;
@@ -278,7 +277,7 @@ pub trait Caller {
     /// Error is a type-erased error coming from the VM itself.
     fn alloc(&mut self, idx: u32, size: usize, ctx: u32) -> VMResult<u32>;
     /// Returns the amount of gas remaining.
-    fn get_remaining_points(&mut self) -> MeteringPoints;
+    fn get_remaining_points(&mut self) -> VMResult<MeteringPoints>;
     /// Check for gas exhaustion, then reduce remaining by amount if able.
     /// Set the amount of gas used.
     fn consume_gas(&mut self, value: u64) -> VMResult<()>;

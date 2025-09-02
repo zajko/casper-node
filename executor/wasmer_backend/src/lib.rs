@@ -176,18 +176,8 @@ impl<S: GlobalStateReader + 'static, E: Executor + 'static> Caller for WasmerCal
         self.env.data().bytecode.clone()
     }
 
-    #[inline]
-    fn has_export(&self, name: &str) -> bool {
-        self.with_instance(|instance| instance.exports.contains(name))
-    }
-
     fn memory_read_into(&self, offset: u32, output: &mut [u8]) -> VMResult<()> {
         self.with_memory(|mem| mem.read(offset.into(), output))?
-            .map_err(from_wasmer_memory_access_error)
-    }
-
-    fn memory_write(&self, offset: u32, data: &[u8]) -> Result<(), VMError> {
-        self.with_memory(|mem| mem.write(offset.into(), data))
             .map_err(from_wasmer_memory_access_error)
     }
 
@@ -239,8 +229,7 @@ impl<S: GlobalStateReader + 'static, E: Executor + 'static> Caller for WasmerCal
     }
 
     /// Returns the amount of gas remaining.
-    #[inline]
-    fn gas_consumed(&mut self) -> VMResult<MeteringPoints> {
+    fn get_remaining_points(&mut self) -> VMResult<MeteringPoints> {
         self.get_remaining_points()
     }
 
@@ -248,7 +237,7 @@ impl<S: GlobalStateReader + 'static, E: Executor + 'static> Caller for WasmerCal
     ///
     /// This method will cause the VM engine to stop in case remaining gas points are depleted.
     fn consume_gas(&mut self, amount: u64) -> VMResult<()> {
-        match self.get_remaining_points() {
+        match self.get_remaining_points()? {
             MeteringPoints::Remaining(remaining_points) => {
                 let remaining_points = remaining_points
                     .checked_sub(amount)

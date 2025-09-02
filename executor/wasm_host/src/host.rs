@@ -874,7 +874,7 @@ pub fn casper_create<S: GlobalStateReader + 'static, E: Executor + 'static>(
         Some(entry_point_name) => {
             // Limit the new VM to remaining gas.
             let gas_limit = caller
-                .get_remaining_points()
+                .get_remaining_points()?
                 .try_into_remaining()
                 .map_err(|_| InternalHostError::TypeConversion)?;
 
@@ -1007,7 +1007,7 @@ pub fn casper_system<S: GlobalStateReader + 'static, E: Executor + 'static>(
 
     // Limit the call to remaining gas.
     let gas_limit = caller
-        .get_remaining_points()
+        .get_remaining_points()?
         .try_into_remaining()
         .map_err(|_| InternalHostError::TypeConversion)?;
 
@@ -1094,7 +1094,7 @@ pub fn casper_call<S: GlobalStateReader + 'static, E: Executor + 'static>(
 
     // Limit the new VM to remaining gas.
     let gas_limit = caller
-        .get_remaining_points()
+        .get_remaining_points()?
         .try_into_remaining()
         .map_err(|_| InternalHostError::TypeConversion)?;
 
@@ -1654,7 +1654,7 @@ pub fn casper_upgrade<S: GlobalStateReader + 'static, E: Executor>(
     if let Some(entry_point_name) = entry_point {
         // Limit the new VM to remaining gas.
         let gas_limit = caller
-            .get_remaining_points()
+            .get_remaining_points()?
             .try_into_remaining()
             .map_err(|_| InternalHostError::TypeConversion)?;
 
