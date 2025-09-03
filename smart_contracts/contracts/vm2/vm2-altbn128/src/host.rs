@@ -5,8 +5,10 @@ use casper_contract_sdk::{
     casper::{
         self,
         altbn128::{self, AltBn128Error as Error, Fq, Fr, Pair, G1},
+        casper_system,
     },
     casper_executor_wasm_common::flags::ReturnFlags,
+    types::{CryptoFunctionOption, U256},
 };
 
 const ADD_X1_LE: [u8; 32] = [
@@ -105,21 +107,19 @@ const PAIRING_BBY_2_LE: [u8; 32] = [
 ];
 const ALL_ONES: [u8; 32] = [0x11; 32];
 
-fn alt_bn128_pairing_raw(input: &[u8]) -> altbn128::Result<bool> {
-    let mut result = MaybeUninit::uninit();
+fn alt_bn128_pairing_raw(
+    values: &Vec<(U256, U256, U256, U256, U256, U256)>,
+) -> altbn128::Result<bool> {
+    let option = CryptoFunctionOption::AltBn128Pairing;
+    let input = borsh::to_vec(values).expect("Serialization to succeed");
 
-    let ret = unsafe {
-        casper_alt_bn128_pairing(
-            input.as_ptr() as *const c_void,
-            input.len(),
-            result.as_mut_ptr(),
-        )
-    };
-
-    if ret == 0 {
-        Ok(unsafe { result.assume_init() } != 0)
-    } else {
-        Err(Error::from(ret))
+    let (output, result) = casper_system(option.into(), &input);
+    match output {
+        Some(raw) => {
+            let val: Result<bool, u32> = borsh::from_slice(&raw).unwrap();
+            val.map_err(|err_code| Error::from(err_code))
+        }
+        None => Err(AltBn128Error::NoValueOrError),
     }
 }
 

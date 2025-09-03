@@ -136,6 +136,8 @@ pub enum AltBn128Error {
     InvalidBby = 11,
     /// Invalid Bbx.
     InvalidBbx = 12,
+    /// No return value or error
+    NoValueOrError = 13,
     /// Unknown error.
     Unknown(u32),
 }
@@ -155,6 +157,7 @@ impl From<AltBn128Error> for u32 {
             AltBn128Error::InvalidBax => 10,
             AltBn128Error::InvalidBby => 11,
             AltBn128Error::InvalidBbx => 12,
+            AltBn128Error::NoValueOrError => 13,
             AltBn128Error::Unknown(catch_all) => catch_all,
         }
     }
@@ -174,6 +177,7 @@ impl From<u32> for AltBn128Error {
             10 => AltBn128Error::InvalidBax,
             11 => AltBn128Error::InvalidBby,
             12 => AltBn128Error::InvalidBbx,
+            13 => AltBn128Error::NoValueOrError,
             value => AltBn128Error::Unknown(value),
         }
     }

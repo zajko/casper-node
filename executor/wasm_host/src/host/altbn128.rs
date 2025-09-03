@@ -42,6 +42,9 @@ pub enum AltBN128Error {
     /// Invalid Bbx.
     #[error("Invalid Bbx")]
     InvalidBbx = 12,
+    /// No return value or error
+    #[error("Function cal returned no error or value")]
+    NoValueOrError = 13,
 }
 
 pub(crate) fn alt_bn128_add(
