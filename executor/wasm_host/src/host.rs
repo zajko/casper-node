@@ -1,3 +1,4 @@
+pub(crate) mod altbn128;
 use std::{borrow::Cow, num::NonZeroU32, sync::Arc};
 
 use bytes::Bytes;
@@ -18,7 +19,9 @@ use casper_executor_wasm_common::{
     keyspace::{Keyspace, KeyspaceTag},
 };
 use casper_executor_wasm_interface::{
-    executor::{ExecuteError, ExecuteRequestBuilder, ExecuteResult, ExecutionKind, Executor},
+    executor::{
+        CryptoMethods, ExecuteError, ExecuteRequestBuilder, ExecuteResult, ExecutionKind, Executor,
+    },
     u32_from_host_result, Caller, InternalHostError, VMError, VMResult,
 };
 use casper_storage::{
@@ -37,7 +40,7 @@ use casper_types::{
     ByteCodeHash, ByteCodeKind, CLType, CLValue, ContractRuntimeTag, Digest, EntityAddr,
     EntityEntryPoint, EntityKind, EntryPointAccess, EntryPointAddr, EntryPointPayment,
     EntryPointType, EntryPointValue, HashAddr, HashAlgorithm, HostFunctionV2, Key, Package,
-    PackageHash, ProtocolVersion, Signature, StoredValue, URef, U512,
+    PackageHash, ProtocolVersion, Signature, StoredValue, URef, U256, U512,
 };
 use either::Either;
 use num_derive::FromPrimitive;
@@ -998,6 +1001,26 @@ pub fn casper_system<S: GlobalStateReader + 'static, E: Executor + 'static>(
             AuctionMethods::AddReservation => caller.context().auction_costs.add_reservations,
             AuctionMethods::CancelReservation => caller.context().auction_costs.cancel_reservations,
             AuctionMethods::ChangePublicKey => caller.context().auction_costs.change_bid_public_key,
+        },
+        SystemMenu::Crypto(crypto_opt) => match crypto_opt {
+            CryptoMethods::AltBn128Add => caller
+                .context()
+                .config
+                .host_function_costs()
+                .alt_bn128_add
+                .cost(),
+            CryptoMethods::AltBn128Multiply => caller
+                .context()
+                .config
+                .host_function_costs()
+                .alt_bn128_mul
+                .cost(),
+            CryptoMethods::AltBn128Pairing => caller
+                .context()
+                .config
+                .host_function_costs()
+                .alt_bn128_pairing
+                .cost(),
         },
     };
     // the following can produce a VMError::OutOfGas error
