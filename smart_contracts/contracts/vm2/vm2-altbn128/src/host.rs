@@ -1,6 +1,4 @@
 use alloc::format;
-use core::{ffi::c_void, mem::MaybeUninit};
-
 use casper_contract_sdk::{
     casper::{
         self,
@@ -8,7 +6,8 @@ use casper_contract_sdk::{
         casper_system,
     },
     casper_executor_wasm_common::flags::ReturnFlags,
-    types::{CryptoFunctionOption, U256},
+    serializers::borsh::from_slice,
+    types::CryptoFunctionOption,
 };
 
 const ADD_X1_LE: [u8; 32] = [
@@ -107,35 +106,36 @@ const PAIRING_BBY_2_LE: [u8; 32] = [
 ];
 const ALL_ONES: [u8; 32] = [0x11; 32];
 
-fn alt_bn128_pairing_raw(
-    values: &Vec<(U256, U256, U256, U256, U256, U256)>,
-) -> altbn128::Result<bool> {
+fn alt_bn128_pairing_raw(input: &[u8]) -> altbn128::Result<bool> {
     let option = CryptoFunctionOption::AltBn128Pairing;
-    let input = borsh::to_vec(values).expect("Serialization to succeed");
-
     let (output, result) = casper_system(option.into(), &input);
+    let _ = result.unwrap();
     match output {
         Some(raw) => {
-            let val: Result<bool, u32> = borsh::from_slice(&raw).unwrap();
+            let val: Result<bool, u32> = from_slice(&raw).unwrap();
             val.map_err(|err_code| Error::from(err_code))
         }
-        None => Err(AltBn128Error::NoValueOrError),
+        None => Err(Error::NoValueOrError),
     }
 }
 
 fn test_alt_bn128_add() {
+    casper::print("z1");
     let actual = altbn128::alt_bn128_add(
         &G1::from(ADD_X1_LE),
         &G1::from(ADD_Y1_LE),
         &G1::from(ADD_X2_LE),
         &G1::from(ADD_Y2_LE),
     );
+    casper::print("z2");
     let expected = Ok((Fq::from(ADD_EXPECTED_X_LE), Fq::from(ADD_EXPECTED_Y_LE)));
+    casper::print("z3");
     if actual != expected {
         casper::print(&format!("left {:?} right {:?}", actual, expected));
         let error_code = line!().to_le_bytes();
         casper::ret(ReturnFlags::REVERT, Some(&error_code));
     }
+    casper::print("z4-1");
 }
 
 fn test_zero_add() {
@@ -252,26 +252,37 @@ fn test_pairing_on_curve() {
 fn test_alt_bn128_invalid_pairing_args() {
     assert_eq!(alt_bn128_pairing_raw(&[0u8; 0]), Ok(true));
     assert_eq!(alt_bn128_pairing_raw(&[0u8; 1]), Err(Error::InvalidLength));
-    assert_eq!(
-        unsafe {
-            let mut result = MaybeUninit::uninit();
-            casper_alt_bn128_pairing([0u8; 0].as_ptr() as *const c_void, 193, result.as_mut_ptr())
-        },
-        1
-    );
+    let option = CryptoFunctionOption::AltBn128Pairing;
+    let (res, r) = casper_system(option.into(), &[]);
+    assert!(r.is_ok());
+    let res = res.unwrap();
+    let res: Result<bool, u32> = from_slice(&res).unwrap();
+    assert_eq!(res, Ok(true));
 }
 
 pub(crate) fn perform_tests() {
+    casper::print("abc1");
     test_alt_bn128_add();
+    casper::print("abc2");
     test_alt_bn128_mul();
+    casper::print("abc3");
     test_alt_bn128_pairing();
+    casper::print("abc4");
 
     test_alt_bn128_invalid_pairing_args();
+    casper::print("abc5");
     test_zero_add();
+    casper::print("abc6");
     test_add_error();
+    casper::print("abc7");
     test_zero_multiplication();
+    casper::print("abc8");
     test_not_on_curve_multiplication();
+    casper::print("abc9");
     test_pairing_no_input();
+    casper::print("abc10");
     test_pairing_invalid_a();
+    casper::print("abc11");
     test_pairing_on_curve();
+    casper::print("abc12");
 }

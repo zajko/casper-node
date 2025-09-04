@@ -1,14 +1,15 @@
 //! Host-optimized support for pairing cryptography with the Barreto-Naehrig curve
-use core::{array::TryFromSliceError, ffi::c_void, mem::MaybeUninit};
+use core::array::TryFromSliceError;
 
-use casper_contract_sdk_sys::{
-    casper_alt_bn128_add, casper_alt_bn128_mul, casper_alt_bn128_pairing,
+use borsh::{BorshDeserialize, BorshSerialize};
+
+use crate::{
+    casper::{self, casper_system},
+    types::{CryptoFunctionOption, U256},
 };
 
-use crate::types::U256;
-
 /// A point on the alt_bn128 curve.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, BorshSerialize, BorshDeserialize)]
 #[repr(C, packed)]
 pub struct G1([u8; 32]);
 
@@ -39,7 +40,7 @@ impl From<U256> for G1 {
 }
 
 /// A scalar on the alt_bn128 curve.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, BorshSerialize, BorshDeserialize)]
 #[repr(C, packed)]
 pub struct Fr([u8; 32]);
 
@@ -71,7 +72,7 @@ impl From<[u8; 32]> for Fr {
 }
 
 /// A field element on the alt_bn128 curve.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, BorshSerialize, BorshDeserialize)]
 #[repr(C, packed)]
 pub struct Fq([u8; 32]);
 
@@ -109,7 +110,8 @@ impl From<[u8; 32]> for Fq {
 }
 
 /// Error type for the alt_bn128 module.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, BorshDeserialize, BorshSerialize)]
+#[borsh(crate = "crate::serializers::borsh", use_discriminant = true)]
 #[repr(u32)]
 pub enum AltBn128Error {
     /// Invalid length.
@@ -138,6 +140,8 @@ pub enum AltBn128Error {
     InvalidBbx = 12,
     /// No return value or error
     NoValueOrError = 13,
+    /// Call error
+    CallError = 14,
     /// Unknown error.
     Unknown(u32),
 }
@@ -158,6 +162,7 @@ impl From<AltBn128Error> for u32 {
             AltBn128Error::InvalidBby => 11,
             AltBn128Error::InvalidBbx => 12,
             AltBn128Error::NoValueOrError => 13,
+            AltBn128Error::CallError => 14,
             AltBn128Error::Unknown(catch_all) => catch_all,
         }
     }
@@ -178,6 +183,7 @@ impl From<u32> for AltBn128Error {
             11 => AltBn128Error::InvalidBby,
             12 => AltBn128Error::InvalidBbx,
             13 => AltBn128Error::NoValueOrError,
+            14 => AltBn128Error::CallError,
             value => AltBn128Error::Unknown(value),
         }
     }
@@ -188,58 +194,46 @@ pub type Result<T> = core::result::Result<T, AltBn128Error>;
 
 /// Adds two points on the alt_bn128 curve.
 pub fn alt_bn128_add(x1: &G1, y1: &G1, x2: &G1, y2: &G1) -> Result<(Fq, Fq)> {
-    let mut x_buf = [0; 32];
-    let mut y_buf = [0; 32];
-
-    let ret = unsafe {
-        casper_alt_bn128_add(
-            x1.0.as_ptr(),
-            G1::SIZE_IN_BYTES,
-            y1.0.as_ptr(),
-            G1::SIZE_IN_BYTES,
-            x2.0.as_ptr(),
-            G1::SIZE_IN_BYTES,
-            y2.0.as_ptr(),
-            G1::SIZE_IN_BYTES,
-            x_buf.as_mut_ptr(),
-            y_buf.as_mut_ptr(),
-        )
-    };
-
-    if ret == 0 {
-        Ok((Fq(x_buf), Fq(y_buf)))
-    } else {
-        Err(AltBn128Error::from(ret))
+    casper::print("q1");
+    let input = borsh::to_vec(&(x1, y1, x2, y2)).expect("Serialization to succeed");
+    casper::print("q2");
+    let option = CryptoFunctionOption::AltBn128Pairing;
+    casper::print("q3");
+    let (output, result) = casper_system(option.into(), &input);
+    casper::print("q4");
+    let _ = result.map_err(|_err| AltBn128Error::CallError)?;
+    casper::print("q5");
+    match output {
+        Some(raw) => {
+            casper::print("q6");
+            let val: Result<(U256, U256)> = borsh::from_slice(&raw).unwrap();
+            val.map(|(x, y)| (Fq(u256_to_le_bytes(x)), Fq(u256_to_le_bytes(y))))
+        }
+        None => {
+            casper::print("q7");
+            Err(AltBn128Error::NoValueOrError)
+        }
     }
 }
 
 /// Multiplies a point on the alt_bn128 curve by a scalar.
 pub fn alt_bn128_mul(x: &G1, y: &G1, scalar: &Fr) -> Result<(Fq, Fq)> {
-    let mut x_buf = [0; 32];
-    let mut y_buf = [0; 32];
+    let input = borsh::to_vec(&(x, y, scalar)).expect("Serialization to succeed");
+    let option = CryptoFunctionOption::AltBn128Pairing;
 
-    let ret = unsafe {
-        casper_alt_bn128_mul(
-            x.0.as_ptr(),
-            G1::SIZE_IN_BYTES,
-            y.0.as_ptr(),
-            G1::SIZE_IN_BYTES,
-            scalar.0.as_ptr(),
-            Fr::SIZE_IN_BYTES,
-            x_buf.as_mut_ptr(),
-            y_buf.as_mut_ptr(),
-        )
-    };
-
-    if ret == 0 {
-        Ok((Fq(x_buf), Fq(y_buf)))
-    } else {
-        Err(AltBn128Error::from(ret))
+    let (output, result) = casper_system(option.into(), &input);
+    let _ = result.map_err(|_err| AltBn128Error::CallError)?;
+    match output {
+        Some(raw) => {
+            let val: Result<(U256, U256)> = borsh::from_slice(&raw).unwrap();
+            val.map(|(x, y)| (Fq(u256_to_le_bytes(x)), Fq(u256_to_le_bytes(y))))
+        }
+        None => Err(AltBn128Error::NoValueOrError),
     }
 }
 
 /// A pairing of points on the alt_bn128 curve.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, BorshSerialize, BorshDeserialize)]
 #[repr(C, packed)]
 pub struct Pair {
     /// G1 point
@@ -263,25 +257,17 @@ const _: () = assert!(
 
 /// Performs a pairing of points on the alt_bn128 curve.
 pub fn alt_bn128_pairing(points: &[Pair]) -> Result<bool> {
-    let mut result = MaybeUninit::uninit();
+    let input = borsh::to_vec(points).expect("Serialization to succeed");
+    let option = CryptoFunctionOption::AltBn128Pairing;
 
-    let bytes: &[u8] = unsafe {
-        core::slice::from_raw_parts(points.as_ptr() as *const u8, core::mem::size_of_val(points))
-    };
-    println!("raw bytes: {bytes:?}");
-
-    let ret = unsafe {
-        casper_alt_bn128_pairing(
-            bytes.as_ptr() as *const c_void,
-            bytes.len(),
-            result.as_mut_ptr(),
-        )
-    };
-
-    if ret == 0 {
-        Ok(unsafe { result.assume_init() } != 0)
-    } else {
-        Err(AltBn128Error::from(ret))
+    let (output, result) = casper_system(option.into(), &input);
+    let _ = result.map_err(|_err| AltBn128Error::CallError)?;
+    match output {
+        Some(raw) => {
+            let val: Result<bool> = borsh::from_slice(&raw).unwrap();
+            val
+        }
+        None => Err(AltBn128Error::NoValueOrError),
     }
 }
 

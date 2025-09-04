@@ -4,6 +4,7 @@ pub mod native;
 
 use crate::{
     abi::{CasperABI, EnumVariant},
+    casper,
     compat::types::{CLType, CLTyped},
     prelude::{
         ffi::c_void,
@@ -254,15 +255,20 @@ pub(crate) fn call_into_system<F: FnOnce(usize) -> Option<ptr::NonNull<u8>>>(
     input_data: &[u8],
     alloc: Option<F>,
 ) -> Result<(), CallError> {
+    casper::print("h1");
     let result_code = unsafe {
-        casper_contract_sdk_sys::casper_system(
+        casper::print("h2");
+        let rc = casper_contract_sdk_sys::casper_system(
             system_contract_opt,
             input_data.as_ptr(),
             input_data.len(),
             alloc_callback::<F>,
             &alloc as *const _ as *mut _,
-        )
+        );
+        casper::print("h3");
+        rc
     };
+    casper::print("h4");
     call_result_from_code(result_code)
 }
 
@@ -279,6 +285,7 @@ pub fn casper_system(
     system_contract_opt: u32,
     input_data: &[u8],
 ) -> (Option<Vec<u8>>, Result<(), CallError>) {
+    casper::print("w1");
     let mut output = None;
     let result_code = call_into_system(
         system_contract_opt,
@@ -291,6 +298,7 @@ pub fn casper_system(
             result
         }),
     );
+    casper::print("w2");
     (output, result_code)
 }
 

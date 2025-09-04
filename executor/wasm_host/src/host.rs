@@ -40,7 +40,7 @@ use casper_types::{
     ByteCodeHash, ByteCodeKind, CLType, CLValue, ContractRuntimeTag, Digest, EntityAddr,
     EntityEntryPoint, EntityKind, EntryPointAccess, EntryPointAddr, EntryPointPayment,
     EntryPointType, EntryPointValue, HashAddr, HashAlgorithm, HostFunctionV2, Key, Package,
-    PackageHash, ProtocolVersion, Signature, StoredValue, URef, U256, U512,
+    PackageHash, ProtocolVersion, Signature, StoredValue, URef, U512,
 };
 use either::Either;
 use num_derive::FromPrimitive;

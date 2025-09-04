@@ -6,9 +6,6 @@ use thiserror::Error as ThisError;
 #[derive(Debug, ThisError, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum AltBN128Error {
-    /// Invalid length.
-    #[error("Invalid length")]
-    InvalidLength = 1,
     /// Invalid point x coordinate.
     #[error("Invalid point x coordinate")]
     InvalidXCoordinate = 2,
@@ -42,9 +39,6 @@ pub enum AltBN128Error {
     /// Invalid Bbx.
     #[error("Invalid Bbx")]
     InvalidBbx = 12,
-    /// No return value or error
-    #[error("Function cal returned no error or value")]
-    NoValueOrError = 13,
 }
 
 pub(crate) fn alt_bn128_add(
@@ -138,12 +132,6 @@ fn fq_to_u256(fq: Fq) -> U256 {
     let mut buf = [0u8; 32];
     fq.to_big_endian(&mut buf).unwrap();
     U256::from_big_endian(&buf)
-}
-
-pub(crate) fn to_le_bytes(value: U256) -> [u8; 32] {
-    let mut buf = [0u8; 32];
-    value.to_little_endian(&mut buf);
-    buf
 }
 
 fn fq_from_u256(value: U256) -> Result<Fq, FieldError> {
