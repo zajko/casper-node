@@ -58,19 +58,18 @@ pub(crate) fn alt_bn128_add_raw<S: GlobalStateReader, E: Executor>(
     input_ptr: u32,
     input_len: u32,
 ) -> Result<Result<(U256, U256), u32>, VMError> {
-    return Ok(Err(5));
     let alt_bn128_add_host_function = caller.context().config.host_function_costs().alt_bn128_add;
+    charge_host_function_call(
+        caller,
+        &alt_bn128_add_host_function,
+        [u64::from(input_ptr), u64::from(input_len)],
+    )?;
     let input_data: Bytes = caller.memory_read(input_ptr, input_len as _)?.into();
     let (x1, y1, x2, y2): (U256, U256, U256, U256) =
         borsh::from_slice(&input_data).map_err(|err| {
             debug!("Failed to deserialize alt_bn128_add input, reason: {err}");
             ExecuteError::Api("Couldn't deserialize x1 arg".to_owned())
         })?;
-    charge_host_function_call(
-        caller,
-        &alt_bn128_add_host_function,
-        [u64::from(input_ptr), u64::from(input_len)],
-    )?;
     match alt_bn128_add(x1, y1, x2, y2) {
         Ok((x, y)) => Ok(Ok((x, y))),
         Err(err) => Ok(Err(err as u32)),
@@ -101,29 +100,16 @@ pub(crate) fn alt_bn128_mul_raw<S: GlobalStateReader, E: Executor>(
     input_len: u32,
 ) -> Result<Result<(U256, U256), u32>, VMError> {
     let alt_bn128_mul_host_function = caller.context().config.host_function_costs().alt_bn128_mul;
-    let input_data: Bytes = caller.memory_read(input_ptr, input_len as _)?.into();
     charge_host_function_call(
         caller,
         &alt_bn128_mul_host_function,
         [u64::from(input_ptr), u64::from(input_len)],
     )?;
-
-    let len = input_data.len();
-    if len != 96 {
-        return Err(VMError::Execute(ExecuteError::Api(format!(
-            "Expected 128 bytes of data for AltBn128Add. Got {len}"
-        ))));
-    }
-    let mut slice = input_data.as_slice().chunks(32);
-    let x1 = U256::from_le_slice(slice.nth(0).unwrap()).ok_or(VMError::Execute(
-        ExecuteError::Api("Couldn't deserialize x1 arg".to_owned()),
-    ))?; //unwrap here is safe since we checked input_data length
-    let y1 = U256::from_le_slice(slice.nth(1).unwrap()).ok_or(VMError::Execute(
-        ExecuteError::Api("Couldn't deserialize y1 arg".to_owned()),
-    ))?;
-    let scalar = U256::from_le_slice(slice.nth(2).unwrap()).ok_or(VMError::Execute(
-        ExecuteError::Api("Couldn't deserialize scalar arg".to_owned()),
-    ))?;
+    let input_data: Bytes = caller.memory_read(input_ptr, input_len as _)?.into();
+    let (x1, y1, scalar): (U256, U256, U256) = borsh::from_slice(&input_data).map_err(|err| {
+        debug!("Failed to deserialize alt_bn128_add input, reason: {err}");
+        ExecuteError::Api("Couldn't deserialize x1 arg".to_owned())
+    })?;
 
     match alt_bn128_mul(x1, y1, scalar) {
         Ok((x, y)) => Ok(Ok((x, y))),
@@ -162,10 +148,7 @@ pub(crate) fn alt_bn128_pairing_raw<S: GlobalStateReader, E: Executor>(
         [u64::from(input_ptr), u64::from(input_len)],
     )?;
     let input_data: Bytes = caller.memory_read(input_ptr, input_len as _)?.into();
-    const PAIR_ELEMENT_LEN: usize = 6 * core::mem::size_of::<U256>();
-    if (input_len as usize) % PAIR_ELEMENT_LEN != 0 {
-        return Ok(Err(AltBN128Error::InvalidLength as _));
-    }
+    println!("XXX {input_data:?}");
     let values: Vec<(U256, U256, U256, U256, U256, U256)> =
         borsh::from_slice(input_data.as_slice()).map_err(|e| {
             debug!("Cannot deserialize arguments to AltBn128Pairing, error: {e}");
@@ -244,6 +227,7 @@ fn fq_from_u256(value: U256) -> Result<Fq, FieldError> {
 }
 
 fn u256_to_be_bytes(value: U256) -> [u8; 32] {
+    let value = value.to_be();
     let mut bytes = [0; 32];
     let mut i = 4;
     let digits = value.digits();

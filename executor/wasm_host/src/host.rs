@@ -1017,36 +1017,27 @@ pub fn casper_system<S: GlobalStateReader + 'static, E: Executor + 'static>(
             let result_bytes = match crypto_opt {
                 CryptoMethods::AltBn128Add => {
                     let res = alt_bn128_add_raw(&mut caller, input_ptr, input_len)?;
-                    match res {
-                        Ok(r) => borsh::to_vec(&r).map_err(|_| {
-                            VMError::Execute(ExecuteError::Api(
-                                "Cannot serialize result of AltBn128Pairing".to_owned(),
-                            ))
-                        })?,
-                        Err(err) => return Ok(err),
-                    }
+                    borsh::to_vec(&res).map_err(|_| {
+                        VMError::Execute(ExecuteError::Api(
+                            "Cannot serialize result of AltBn128Add".to_owned(),
+                        ))
+                    })?
                 }
                 CryptoMethods::AltBn128Multiply => {
                     let res = alt_bn128_mul_raw(&mut caller, input_ptr, input_len)?;
-                    match res {
-                        Ok(r) => borsh::to_vec(&r).map_err(|_| {
-                            VMError::Execute(ExecuteError::Api(
-                                "Cannot serialize result of AltBn128Pairing".to_owned(),
-                            ))
-                        })?,
-                        Err(err) => return Ok(err),
-                    }
+                    borsh::to_vec(&res).map_err(|_| {
+                        VMError::Execute(ExecuteError::Api(
+                            "Cannot serialize result of AltBn128Multiply".to_owned(),
+                        ))
+                    })?
                 }
                 CryptoMethods::AltBn128Pairing => {
                     let res = alt_bn128_pairing_raw(&mut caller, input_ptr, input_len)?;
-                    match res {
-                        Ok(r) => borsh::to_vec(&r).map_err(|_| {
-                            VMError::Execute(ExecuteError::Api(
-                                "Cannot serialize result of AltBn128Pairing".to_owned(),
-                            ))
-                        })?,
-                        Err(err) => return Ok(err),
-                    }
+                    borsh::to_vec(&res).map_err(|_| {
+                        VMError::Execute(ExecuteError::Api(
+                            "Cannot serialize result of AltBn128Pairing".to_owned(),
+                        ))
+                    })?
                 }
             };
             let out_ptr: u32 = if cb_alloc != 0 {

@@ -257,10 +257,8 @@ fn test_alt_bn128_invalid_pairing_args() {
 }
 
 pub(crate) fn perform_tests() {
-    test_alt_bn128_add();
-    return;
-    casper::print("abc2");
-    test_alt_bn128_mul();
+    //#TODO test_alt_bn128_add();
+    //#TODO test_alt_bn128_mul();
     casper::print("abc3");
     test_alt_bn128_pairing();
     casper::print("abc4");

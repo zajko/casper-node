@@ -43,7 +43,6 @@ impl Default for AltBn128Contract {
 impl AltBn128Contract {
     #[casper(constructor)]
     pub fn new() -> Self {
-        casper::print("abc");
         perform_tests();
         Self {}
     }
