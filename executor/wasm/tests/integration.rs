@@ -12,7 +12,7 @@ use casper_executor_wasm::{
         base_execute_builder, base_install_request_builder, call_dummy_host_fn_by_name,
         expect_successful_execution, make_address_generator, make_executor,
         make_global_state_with_genesis, make_runtime_config, read_wasm, run_create_contract,
-        run_wasm_session, DEFAULT_GAS_LIMIT, TRANSACTION_HASH,
+        run_wasm_session, DEFAULT_CHAIN_NAME, DEFAULT_GAS_LIMIT, TRANSACTION_HASH,
     },
     ExecutorV2,
 };
@@ -45,7 +45,7 @@ use casper_types::{
     account::AccountHash,
     execution::RetValue,
     system::auction::{BidAddr, BidKind},
-    BlockHash, BlockTime, Digest, EntityAddr, Key, StoredValue, Timestamp,
+    BlockHash, BlockTime, Digest, EntityAddr, Key, RuntimeArgs, StoredValue, Timestamp,
 };
 use fs_extra::dir;
 use itertools::Itertools;

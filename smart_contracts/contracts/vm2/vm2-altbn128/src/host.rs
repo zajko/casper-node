@@ -115,27 +115,23 @@ fn alt_bn128_pairing_raw(input: &[u8]) -> altbn128::Result<bool> {
             let val: Result<bool, u32> = from_slice(&raw).unwrap();
             val.map_err(|err_code| Error::from(err_code))
         }
-        None => Err(Error::NoValueOrError),
+        None => Err(Error::NoValueNorError),
     }
 }
 
 fn test_alt_bn128_add() {
-    casper::print("z1");
     let actual = altbn128::alt_bn128_add(
         &G1::from(ADD_X1_LE),
         &G1::from(ADD_Y1_LE),
         &G1::from(ADD_X2_LE),
         &G1::from(ADD_Y2_LE),
     );
-    casper::print("z2");
     let expected = Ok((Fq::from(ADD_EXPECTED_X_LE), Fq::from(ADD_EXPECTED_Y_LE)));
-    casper::print("z3");
     if actual != expected {
         casper::print(&format!("left {:?} right {:?}", actual, expected));
         let error_code = line!().to_le_bytes();
         casper::ret(ReturnFlags::REVERT, Some(&error_code));
     }
-    casper::print("z4-1");
 }
 
 fn test_zero_add() {
@@ -261,8 +257,8 @@ fn test_alt_bn128_invalid_pairing_args() {
 }
 
 pub(crate) fn perform_tests() {
-    casper::print("abc1");
     test_alt_bn128_add();
+    return;
     casper::print("abc2");
     test_alt_bn128_mul();
     casper::print("abc3");

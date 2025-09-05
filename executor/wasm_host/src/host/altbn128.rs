@@ -1,11 +1,23 @@
 use bn::{AffineG1, FieldError, Fq, Fr, Group, G1};
-use casper_types::U256;
+use bnum::types::U256;
+use casper_executor_wasm_interface::{
+    executor::{ExecuteError, Executor},
+    Caller, VMError,
+};
+use casper_storage::global_state::GlobalStateReader;
+use casper_types::bytesrepr::Bytes;
 use thiserror::Error as ThisError;
+use tracing::debug;
+
+use crate::{context::Context, host::charge_host_function_call};
 
 /// Errors that can occur when working with alt_bn128 curve.
 #[derive(Debug, ThisError, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum AltBN128Error {
+    /// Invalid length.
+    #[error("Invalid length")]
+    InvalidLength = 1,
     /// Invalid point x coordinate.
     #[error("Invalid point x coordinate")]
     InvalidXCoordinate = 2,
@@ -41,6 +53,30 @@ pub enum AltBN128Error {
     InvalidBbx = 12,
 }
 
+pub(crate) fn alt_bn128_add_raw<S: GlobalStateReader, E: Executor>(
+    caller: &mut impl Caller<Context = Context<S, E>>,
+    input_ptr: u32,
+    input_len: u32,
+) -> Result<Result<(U256, U256), u32>, VMError> {
+    return Ok(Err(5));
+    let alt_bn128_add_host_function = caller.context().config.host_function_costs().alt_bn128_add;
+    let input_data: Bytes = caller.memory_read(input_ptr, input_len as _)?.into();
+    let (x1, y1, x2, y2): (U256, U256, U256, U256) =
+        borsh::from_slice(&input_data).map_err(|err| {
+            debug!("Failed to deserialize alt_bn128_add input, reason: {err}");
+            ExecuteError::Api("Couldn't deserialize x1 arg".to_owned())
+        })?;
+    charge_host_function_call(
+        caller,
+        &alt_bn128_add_host_function,
+        [u64::from(input_ptr), u64::from(input_len)],
+    )?;
+    match alt_bn128_add(x1, y1, x2, y2) {
+        Ok((x, y)) => Ok(Ok((x, y))),
+        Err(err) => Ok(Err(err as u32)),
+    }
+}
+
 pub(crate) fn alt_bn128_add(
     x1: U256,
     y1: U256,
@@ -49,30 +85,98 @@ pub(crate) fn alt_bn128_add(
 ) -> Result<(U256, U256), AltBN128Error> {
     let p1 = point_from_coords(x1, y1)?;
     let p2 = point_from_coords(x2, y2)?;
-
-    let mut x = U256::zero();
-    let mut y = U256::zero();
+    let mut x = U256::ZERO;
+    let mut y = U256::ZERO;
 
     if let Some(sum) = AffineG1::from_jacobian(p1 + p2) {
-        x = fq_to_u256(sum.x());
-        y = fq_to_u256(sum.y());
+        x = fq_to_u256(sum.x()).ok_or(AltBN128Error::InvalidXCoordinate)?;
+        y = fq_to_u256(sum.y()).ok_or(AltBN128Error::InvalidYCoordinate)?;
     }
     Ok((x, y))
+}
+
+pub(crate) fn alt_bn128_mul_raw<S: GlobalStateReader, E: Executor>(
+    caller: &mut impl Caller<Context = Context<S, E>>,
+    input_ptr: u32,
+    input_len: u32,
+) -> Result<Result<(U256, U256), u32>, VMError> {
+    let alt_bn128_mul_host_function = caller.context().config.host_function_costs().alt_bn128_mul;
+    let input_data: Bytes = caller.memory_read(input_ptr, input_len as _)?.into();
+    charge_host_function_call(
+        caller,
+        &alt_bn128_mul_host_function,
+        [u64::from(input_ptr), u64::from(input_len)],
+    )?;
+
+    let len = input_data.len();
+    if len != 96 {
+        return Err(VMError::Execute(ExecuteError::Api(format!(
+            "Expected 128 bytes of data for AltBn128Add. Got {len}"
+        ))));
+    }
+    let mut slice = input_data.as_slice().chunks(32);
+    let x1 = U256::from_le_slice(slice.nth(0).unwrap()).ok_or(VMError::Execute(
+        ExecuteError::Api("Couldn't deserialize x1 arg".to_owned()),
+    ))?; //unwrap here is safe since we checked input_data length
+    let y1 = U256::from_le_slice(slice.nth(1).unwrap()).ok_or(VMError::Execute(
+        ExecuteError::Api("Couldn't deserialize y1 arg".to_owned()),
+    ))?;
+    let scalar = U256::from_le_slice(slice.nth(2).unwrap()).ok_or(VMError::Execute(
+        ExecuteError::Api("Couldn't deserialize scalar arg".to_owned()),
+    ))?;
+
+    match alt_bn128_mul(x1, y1, scalar) {
+        Ok((x, y)) => Ok(Ok((x, y))),
+        Err(err) => Ok(Err(err as u32)),
+    }
 }
 
 pub(crate) fn alt_bn128_mul(x: U256, y: U256, scalar: U256) -> Result<(U256, U256), AltBN128Error> {
     let p = point_from_coords(x, y)?;
 
-    let mut x = U256::zero();
-    let mut y = U256::zero();
-    let fr = Fr::from_slice(&to_be_bytes(scalar)).map_err(|_| AltBN128Error::InvalidPoint)?;
+    let mut x = U256::ZERO;
+    let mut y = U256::ZERO;
+    let fr = Fr::from_slice(&u256_to_be_bytes(scalar)).map_err(|_| AltBN128Error::InvalidPoint)?;
 
     if let Some(product) = AffineG1::from_jacobian(p * fr) {
-        x = fq_to_u256(product.x());
-        y = fq_to_u256(product.y());
+        x = fq_to_u256(product.x()).ok_or(AltBN128Error::InvalidXCoordinate)?;
+        y = fq_to_u256(product.y()).ok_or(AltBN128Error::InvalidYCoordinate)?;
     }
 
     Ok((x, y))
+}
+
+pub(crate) fn alt_bn128_pairing_raw<S: GlobalStateReader, E: Executor>(
+    caller: &mut impl Caller<Context = Context<S, E>>,
+    input_ptr: u32,
+    input_len: u32,
+) -> Result<Result<bool, u32>, VMError> {
+    let alt_bn128_pairing_host_function = caller
+        .context()
+        .config
+        .host_function_costs()
+        .alt_bn128_pairing;
+    charge_host_function_call(
+        caller,
+        &alt_bn128_pairing_host_function,
+        [u64::from(input_ptr), u64::from(input_len)],
+    )?;
+    let input_data: Bytes = caller.memory_read(input_ptr, input_len as _)?.into();
+    const PAIR_ELEMENT_LEN: usize = 6 * core::mem::size_of::<U256>();
+    if (input_len as usize) % PAIR_ELEMENT_LEN != 0 {
+        return Ok(Err(AltBN128Error::InvalidLength as _));
+    }
+    let values: Vec<(U256, U256, U256, U256, U256, U256)> =
+        borsh::from_slice(input_data.as_slice()).map_err(|e| {
+            debug!("Cannot deserialize arguments to AltBn128Pairing, error: {e}");
+            VMError::Execute(ExecuteError::Api(
+                "Cannot deserialize arguments to AltBn128Pairing".to_owned(),
+            ))
+        })?;
+    match alt_bn128_pairing(values) {
+        Ok(are_paired) => Ok(Ok(are_paired)),
+        Err(err) => Ok(Err(err as u32)),
+    }
 }
 
 /// Pairing check for a list of points.
@@ -116,8 +220,8 @@ pub(crate) fn alt_bn128_pairing(
 }
 
 pub(super) fn point_from_coords(x: U256, y: U256) -> Result<G1, AltBN128Error> {
-    let px = Fq::from_slice(&to_be_bytes(x)).map_err(|_| AltBN128Error::InvalidXCoordinate)?;
-    let py = Fq::from_slice(&to_be_bytes(y)).map_err(|_| AltBN128Error::InvalidYCoordinate)?;
+    let px = fq_from_u256(x).map_err(|_| AltBN128Error::InvalidXCoordinate)?;
+    let py = fq_from_u256(y).map_err(|_| AltBN128Error::InvalidYCoordinate)?;
 
     Ok(if px == Fq::zero() && py == Fq::zero() {
         G1::zero()
@@ -128,28 +232,35 @@ pub(super) fn point_from_coords(x: U256, y: U256) -> Result<G1, AltBN128Error> {
     })
 }
 
-fn fq_to_u256(fq: Fq) -> U256 {
+fn fq_to_u256(fq: Fq) -> Option<U256> {
     let mut buf = [0u8; 32];
     fq.to_big_endian(&mut buf).unwrap();
-    U256::from_big_endian(&buf)
+    U256::from_be_slice(&buf)
 }
 
 fn fq_from_u256(value: U256) -> Result<Fq, FieldError> {
-    let mut buf = [0u8; 32];
-    value.to_big_endian(&mut buf);
+    let buf = u256_to_be_bytes(value);
     Fq::from_slice(&buf)
 }
 
-pub fn to_be_bytes(value: U256) -> [u8; 32] {
-    let mut result = [0u8; 32];
-    value.to_big_endian(&mut result);
-    result
+fn u256_to_be_bytes(value: U256) -> [u8; 32] {
+    let mut bytes = [0; 32];
+    let mut i = 4;
+    let digits = value.digits();
+    while i > 0 {
+        let digit_bytes = digits[4 - i].to_be_bytes();
+        i -= 1;
+        let mut j = 0;
+        while j < 8 as usize {
+            bytes[(i << 3) + j] = digit_bytes[j];
+            j += 1;
+        }
+    }
+    bytes
 }
 
 #[cfg(test)]
 mod tests {
-    use casper_types::U256;
-
     use super::*;
 
     #[test]
@@ -195,8 +306,8 @@ mod tests {
     #[test]
     fn zero() {
         assert_eq!(
-            alt_bn128_add(U256::zero(), U256::zero(), U256::zero(), U256::zero()),
-            Ok((U256::zero(), U256::zero()))
+            alt_bn128_add(U256::ZERO, U256::ZERO, U256::ZERO, U256::ZERO),
+            Ok((U256::ZERO, U256::ZERO))
         );
     }
 

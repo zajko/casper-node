@@ -795,6 +795,13 @@ mod tests {
     }
 
     #[test]
+    fn x() {
+        let x = U256::max_value();
+        let bytes = x.to_bytes().unwrap();
+        println!("bytes: {:?} len: {}", bytes, bytes.len());
+    }
+
+    #[test]
     fn as_primitive_from_u64() {
         let mut input = 0_u64;
         check_as_i32(0, input);

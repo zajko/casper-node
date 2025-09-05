@@ -50,6 +50,7 @@ use tracing::{error, info, warn};
 use crate::{
     abi::{CreateResult, ReadInfo},
     context::Context,
+    host::altbn128::{alt_bn128_add_raw, alt_bn128_mul_raw, alt_bn128_pairing_raw},
     system::{self, DispatchError, TransferArgs},
 };
 use blake2::{
@@ -986,43 +987,92 @@ pub fn casper_system<S: GlobalStateReader + 'static, E: Executor + 'static>(
         }
     };
 
-    let cost = match &option {
-        SystemMenu::Mint(mint_opt) => match mint_opt {
-            MintMethods::Burn => caller.context().mint_costs.burn as u64,
-            MintMethods::Transfer => caller.context().mint_costs.transfer as u64,
-        },
-        SystemMenu::Auction(auction_opt) => match auction_opt {
-            AuctionMethods::Activate => caller.context().auction_costs.activate_bid,
-            AuctionMethods::Bid => caller.context().auction_costs.add_bid,
-            AuctionMethods::Withdraw => caller.context().auction_costs.withdraw_bid,
-            AuctionMethods::Delegate => caller.context().auction_costs.delegate,
-            AuctionMethods::Undelegate => caller.context().auction_costs.undelegate,
-            AuctionMethods::Redelegate => caller.context().auction_costs.redelegate,
-            AuctionMethods::AddReservation => caller.context().auction_costs.add_reservations,
-            AuctionMethods::CancelReservation => caller.context().auction_costs.cancel_reservations,
-            AuctionMethods::ChangePublicKey => caller.context().auction_costs.change_bid_public_key,
-        },
-        SystemMenu::Crypto(crypto_opt) => match crypto_opt {
-            CryptoMethods::AltBn128Add => caller
-                .context()
-                .config
-                .host_function_costs()
-                .alt_bn128_add
-                .cost(),
-            CryptoMethods::AltBn128Multiply => caller
-                .context()
-                .config
-                .host_function_costs()
-                .alt_bn128_mul
-                .cost(),
-            CryptoMethods::AltBn128Pairing => caller
-                .context()
-                .config
-                .host_function_costs()
-                .alt_bn128_pairing
-                .cost(),
-        },
-    };
+    match &option {
+        SystemMenu::Mint(mint_opt) => {
+            let cost = match mint_opt {
+                MintMethods::Burn => caller.context().mint_costs.burn as u64,
+                MintMethods::Transfer => caller.context().mint_costs.transfer as u64,
+            };
+            execute_system_function(caller, input_ptr, input_len, cb_alloc, cb_ctx, option, cost)
+        }
+        SystemMenu::Auction(auction_opt) => {
+            let cost = match auction_opt {
+                AuctionMethods::Activate => caller.context().auction_costs.activate_bid,
+                AuctionMethods::Bid => caller.context().auction_costs.add_bid,
+                AuctionMethods::Withdraw => caller.context().auction_costs.withdraw_bid,
+                AuctionMethods::Delegate => caller.context().auction_costs.delegate,
+                AuctionMethods::Undelegate => caller.context().auction_costs.undelegate,
+                AuctionMethods::Redelegate => caller.context().auction_costs.redelegate,
+                AuctionMethods::AddReservation => caller.context().auction_costs.add_reservations,
+                AuctionMethods::CancelReservation => {
+                    caller.context().auction_costs.cancel_reservations
+                }
+                AuctionMethods::ChangePublicKey => {
+                    caller.context().auction_costs.change_bid_public_key
+                }
+            };
+            execute_system_function(caller, input_ptr, input_len, cb_alloc, cb_ctx, option, cost)
+        }
+        SystemMenu::Crypto(crypto_opt) => {
+            let result_bytes = match crypto_opt {
+                CryptoMethods::AltBn128Add => {
+                    let res = alt_bn128_add_raw(&mut caller, input_ptr, input_len)?;
+                    match res {
+                        Ok(r) => borsh::to_vec(&r).map_err(|_| {
+                            VMError::Execute(ExecuteError::Api(
+                                "Cannot serialize result of AltBn128Pairing".to_owned(),
+                            ))
+                        })?,
+                        Err(err) => return Ok(err),
+                    }
+                }
+                CryptoMethods::AltBn128Multiply => {
+                    let res = alt_bn128_mul_raw(&mut caller, input_ptr, input_len)?;
+                    match res {
+                        Ok(r) => borsh::to_vec(&r).map_err(|_| {
+                            VMError::Execute(ExecuteError::Api(
+                                "Cannot serialize result of AltBn128Pairing".to_owned(),
+                            ))
+                        })?,
+                        Err(err) => return Ok(err),
+                    }
+                }
+                CryptoMethods::AltBn128Pairing => {
+                    let res = alt_bn128_pairing_raw(&mut caller, input_ptr, input_len)?;
+                    match res {
+                        Ok(r) => borsh::to_vec(&r).map_err(|_| {
+                            VMError::Execute(ExecuteError::Api(
+                                "Cannot serialize result of AltBn128Pairing".to_owned(),
+                            ))
+                        })?,
+                        Err(err) => return Ok(err),
+                    }
+                }
+            };
+            let out_ptr: u32 = if cb_alloc != 0 {
+                caller.alloc(cb_alloc, result_bytes.len(), cb_ctx)?
+            } else {
+                // treats alloc_ctx as data
+                cb_ctx
+            };
+
+            if out_ptr != 0 {
+                caller.memory_write(out_ptr, &result_bytes)?;
+            }
+            Ok(CALLEE_SUCCEEDED)
+        }
+    }
+}
+
+fn execute_system_function<S: GlobalStateReader + 'static, E: Executor + 'static>(
+    mut caller: impl Caller<Context = Context<S, E>>,
+    input_ptr: u32,
+    input_len: u32,
+    cb_alloc: u32,
+    cb_ctx: u32,
+    option: SystemMenu,
+    cost: u64,
+) -> Result<u32, VMError> {
     // the following can produce a VMError::OutOfGas error
     charge_gas(&mut caller, cost)?;
 

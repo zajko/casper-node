@@ -205,8 +205,6 @@ const DEFAULT_ALT_BN128_ADD_COST: Cost = 1_000_000;
 const DEFAULT_ALT_BN128_MUL_COST: Cost = 1_000_000;
 const DEFAULT_ALT_BN128_PAIRING_COST: Cost = 1_000_000;
 
-const DEFAULT_ARG_CHARGE: Cost = 120_000;
-
 /// Definition of a host function cost table.
 #[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
 #[cfg_attr(feature = "datasize", derive(DataSize))]
@@ -243,11 +241,11 @@ pub struct HostFunctionCostsV2 {
     /// Cost of calling the `` host function.
     pub recover_secp256k1: HostFunctionV2<[Cost; 6]>,
     /// Cost of calling the `alt_bn128_add` host function.
-    pub alt_bn128_add: HostFunctionV2<[Cost; 10]>,
+    pub alt_bn128_add: HostFunctionV2<[Cost; 2]>,
     /// Cost of calling the `alt_bn128_mul` host function.
-    pub alt_bn128_mul: HostFunctionV2<[Cost; 7]>,
+    pub alt_bn128_mul: HostFunctionV2<[Cost; 2]>,
     /// Cost of calling the `alt_bn128_pairing` host function.
-    pub alt_bn128_pairing: HostFunctionV2<[Cost; 3]>,
+    pub alt_bn128_pairing: HostFunctionV2<[Cost; 2]>,
 }
 
 impl HostFunctionCostsV2 {
@@ -364,22 +362,11 @@ impl Default for HostFunctionCostsV2 {
                     NOT_USED,
                 ],
             ),
-            alt_bn128_add: HostFunctionV2::new(
-                DEFAULT_ALT_BN128_ADD_COST,
-                [
-                    NOT_USED, NOT_USED, NOT_USED, NOT_USED, NOT_USED, NOT_USED, NOT_USED, NOT_USED,
-                    NOT_USED, NOT_USED,
-                ],
-            ),
-            alt_bn128_mul: HostFunctionV2::new(
-                DEFAULT_ALT_BN128_MUL_COST,
-                [
-                    NOT_USED, NOT_USED, NOT_USED, NOT_USED, NOT_USED, NOT_USED, NOT_USED,
-                ],
-            ),
+            alt_bn128_add: HostFunctionV2::new(DEFAULT_ALT_BN128_ADD_COST, [NOT_USED, NOT_USED]),
+            alt_bn128_mul: HostFunctionV2::new(DEFAULT_ALT_BN128_MUL_COST, [NOT_USED, NOT_USED]),
             alt_bn128_pairing: HostFunctionV2::new(
                 DEFAULT_ALT_BN128_PAIRING_COST,
-                [NOT_USED, DEFAULT_ARG_CHARGE, NOT_USED],
+                [NOT_USED, NOT_USED],
             ),
         }
     }

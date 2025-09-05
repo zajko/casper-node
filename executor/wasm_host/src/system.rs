@@ -16,6 +16,8 @@ mod transfer;
 mod undelegate;
 mod withdraw_bid;
 
+use bnum::types::U256;
+use borsh::from_slice;
 use bytes::Bytes;
 use casper_executor_wasm_common::error::CallError;
 use casper_executor_wasm_interface::{executor::CryptoMethods, GasUsage, InternalHostError};
@@ -27,7 +29,7 @@ use casper_storage::{
 };
 use casper_types::{
     bytesrepr, ApiError, CLValueError, EntityAddr, Key, Phase, PublicKey, RuntimeFootprint,
-    TransactionHash, URef, U256, U512,
+    TransactionHash, URef, U512,
 };
 use parking_lot::RwLock;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
@@ -592,74 +594,65 @@ pub fn native_exec<A, T: ToBytes, R: GlobalStateReader + 'static>(
                 .map(|_| None)
             }
         },
-        SystemMenu::Crypto(crypto_method) => match crypto_method {
-            CryptoMethods::AltBn128Add => {
-                let (x1, y1, x2, y2): (U256, U256, U256, U256) =
-                    bytesrepr::deserialize_from_slice(&input).map_err(|_err| {
-                        ExecuteError::InternalHost(InternalHostError::TypeConversion)
-                    })?;
-                match alt_bn128_add(x1, y1, x2, y2) {
-                    Ok((x, y)) => {
-                        let res: Result<(U256, U256), u32> = Ok((x, y));
-                        match res.to_bytes() {
-                            Ok(ret_bytes) => Ok(Some(Bytes::from(ret_bytes))),
-                            Err(_) => Err(DispatchError::Api(ApiError::Formatting)),
-                        }
-                    }
-                    Err(err) => {
-                        let res: Result<(U256, U256), u32> = Err(err as u32);
-                        match res.to_bytes() {
-                            Ok(ret_bytes) => Ok(Some(Bytes::from(ret_bytes))),
-                            Err(_) => Err(DispatchError::Api(ApiError::Formatting)),
-                        }
-                    }
-                }
-            }
-            CryptoMethods::AltBn128Multiply => {
-                let (x1, y1, scalar): (U256, U256, U256) =
-                    bytesrepr::deserialize_from_slice(&input).map_err(|_err| {
-                        ExecuteError::InternalHost(InternalHostError::TypeConversion)
-                    })?;
-                match alt_bn128_mul(x1, y1, scalar) {
-                    Ok((x, y)) => {
-                        let res: Result<(U256, U256), u32> = Ok((x, y));
-                        match res.to_bytes() {
-                            Ok(ret_bytes) => Ok(Some(Bytes::from(ret_bytes))),
-                            Err(_) => Err(DispatchError::Api(ApiError::Formatting)),
-                        }
-                    }
-                    Err(err) => {
-                        let res: Result<(U256, U256), u32> = Err(err as u32);
-                        match res.to_bytes() {
-                            Ok(ret_bytes) => Ok(Some(Bytes::from(ret_bytes))),
-                            Err(_) => Err(DispatchError::Api(ApiError::Formatting)),
+        SystemMenu::Crypto(crypto_method) => {
+            let result_bytes = match crypto_method {
+                CryptoMethods::AltBn128Add => {
+                    let (x1, y1, x2, y2): (U256, U256, U256, U256) =
+                        from_slice(&input).map_err(|_err| {
+                            ExecuteError::InternalHost(InternalHostError::TypeConversion)
+                        })?;
+                    match alt_bn128_add(x1, y1, x2, y2) {
+                        //#TODO this probably should be a return value
+                        Ok((x, y)) => borsh::to_vec(&(x, y)).map_err(|e| {
+                            ExecuteError::Api(format!("AltBn128Add failed to serialize result",))
+                        })?,
+                        Err(err) => {
+                            return Err(ExecuteError::Api(format!(
+                                "AltBn128Add failed with error code {}",
+                                err as u32
+                            )))
                         }
                     }
                 }
-            }
-            CryptoMethods::AltBn128Pairing => {
-                let values: Vec<(U256, U256, U256, U256, U256, U256)> =
-                    bytesrepr::deserialize_from_slice(&input).map_err(|_err| {
-                        ExecuteError::InternalHost(InternalHostError::TypeConversion)
-                    })?;
-                match alt_bn128_pairing(values) {
-                    Ok(paired) => {
-                        let res: Result<bool, u32> = Ok(paired);
-                        match res.to_bytes() {
-                            Ok(ret_bytes) => Ok(Some(Bytes::from(ret_bytes))),
-                            Err(_) => Err(DispatchError::Api(ApiError::Formatting)),
-                        }
-                    }
-                    Err(err) => {
-                        let res: Result<bool, u32> = Err(err as u32);
-                        match res.to_bytes() {
-                            Ok(ret_bytes) => Ok(Some(Bytes::from(ret_bytes))),
-                            Err(_) => Err(DispatchError::Api(ApiError::Formatting)),
+                CryptoMethods::AltBn128Multiply => {
+                    let (x1, y1, scalar): (U256, U256, U256) =
+                        from_slice(&input).map_err(|_err| {
+                            ExecuteError::InternalHost(InternalHostError::TypeConversion)
+                        })?;
+                    match alt_bn128_mul(x1, y1, scalar) {
+                        Ok((x, y)) => borsh::to_vec(&(x, y)).map_err(|e| {
+                            ExecuteError::Api(format!("AltBn128Mul failed to serialize result",))
+                        })?,
+                        Err(err) => {
+                            return Err(ExecuteError::Api(format!(
+                                "AltBn128Mul failed with error code {}",
+                                err as u32
+                            )))
                         }
                     }
                 }
-            }
-        },
+                CryptoMethods::AltBn128Pairing => {
+                    let values: Vec<(U256, U256, U256, U256, U256, U256)> = from_slice(&input)
+                        .map_err(|_err| {
+                            ExecuteError::InternalHost(InternalHostError::TypeConversion)
+                        })?;
+                    match alt_bn128_pairing(values) {
+                        Ok(paired) => borsh::to_vec(&paired).map_err(|e| {
+                            ExecuteError::Api(
+                                format!("AltBn128Pairing failed to serialize result",),
+                            )
+                        })?,
+                        Err(err) => {
+                            return Err(ExecuteError::Api(format!(
+                                "AltBn128Pairing failed with error code {}",
+                                err as u32
+                            )))
+                        }
+                    }
+                }
+            };
+            Ok(Some(Bytes::from(result_bytes)))
+        }
     };
 
     let (output, host_error, execute_error) = match ret {
