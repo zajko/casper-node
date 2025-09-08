@@ -255,9 +255,7 @@ const _: () = assert!(
 
 /// Performs a pairing of points on the alt_bn128 curve.
 pub fn alt_bn128_pairing(points: &[Pair]) -> Result<bool> {
-    casper::print(&format!("points {points:?}"));
     let input = borsh::to_vec(points).expect("Serialization to succeed");
-    casper::print(&format!("alt_bn128_pairing_input {input:?}"));
     let option = CryptoFunctionOption::AltBn128Pairing;
 
     let (output, result) = casper_system(option.into(), &input);

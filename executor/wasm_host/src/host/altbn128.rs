@@ -148,7 +148,6 @@ pub(crate) fn alt_bn128_pairing_raw<S: GlobalStateReader, E: Executor>(
         [u64::from(input_ptr), u64::from(input_len)],
     )?;
     let input_data: Bytes = caller.memory_read(input_ptr, input_len as _)?.into();
-    println!("XXX {input_data:?}");
     let values: Vec<(U256, U256, U256, U256, U256, U256)> =
         borsh::from_slice(input_data.as_slice()).map_err(|e| {
             debug!("Cannot deserialize arguments to AltBn128Pairing, error: {e}");
@@ -168,12 +167,20 @@ pub(crate) fn alt_bn128_pairing(
 ) -> Result<bool, AltBN128Error> {
     let mut pairs = Vec::with_capacity(values.len());
     for (ax, ay, bax, bay, bbx, bby) in values {
+        println!(
+            "vals: {:?} {:?} {:?} {:?} {:?} {:?}",
+            ax, ay, bax, bay, bbx, bby
+        );
         let ax = fq_from_u256(ax).map_err(|_| AltBN128Error::InvalidAx)?;
         let ay = fq_from_u256(ay).map_err(|_| AltBN128Error::InvalidAy)?;
         let bax = fq_from_u256(bax).map_err(|_| AltBN128Error::InvalidBax)?;
         let bay = fq_from_u256(bay).map_err(|_| AltBN128Error::InvalidBay)?;
         let bbx = fq_from_u256(bbx).map_err(|_| AltBN128Error::InvalidBbx)?;
         let bby = fq_from_u256(bby).map_err(|_| AltBN128Error::InvalidBby)?;
+        println!(
+            "fqs: {:?} {:?} {:?} {:?} {:?} {:?}",
+            ax, ay, bax, bay, bbx, bby
+        );
 
         let g1_a = {
             if ax.is_zero() && ay.is_zero() {
@@ -222,8 +229,10 @@ fn fq_to_u256(fq: Fq) -> Option<U256> {
 }
 
 fn fq_from_u256(value: U256) -> Result<Fq, FieldError> {
-    let buf = u256_to_be_bytes(value);
-    Fq::from_slice(&buf)
+    let u256_bytes = u256_to_be_bytes(value.to_be());
+    //#TODO remove the unwrap
+    let arith_u256 = bn::arith::U256::from_slice(&u256_bytes).unwrap();
+    Fq::from_u256(arith_u256)
 }
 
 fn u256_to_be_bytes(value: U256) -> [u8; 32] {
