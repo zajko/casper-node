@@ -1,6 +1,7 @@
 pub mod altbn128;
 #[cfg(all(not(target_arch = "wasm32"), feature = "std"))]
 pub mod native;
+mod native_caller;
 
 use crate::{
     abi::{CasperABI, EnumVariant},

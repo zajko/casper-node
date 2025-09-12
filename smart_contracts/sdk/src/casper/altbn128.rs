@@ -276,6 +276,22 @@ const _: () = assert!(
 );
 
 /// Performs a pairing of points on the alt_bn128 curve.
+/// # Assumptions
+/// ```
+///   use casper_contract_sdk::casper::altbn128::{alt_bn128_pairing, Pair};
+///   assert_eq!(alt_bn128_pairing(&[]), Ok(true))
+/// ```
+///
+/// ```
+///   use casper_contract_sdk::casper::altbn128::{alt_bn128_pairing, Pair};
+///   assert_eq!(alt_bn128_pairing(&[Pair::zero()]), Ok(true))
+/// ```
+///
+/// ```
+///   use casper_contract_sdk::casper::altbn128::{alt_bn128_pairing, Pair};
+///   // Any number of zero pairs are paired with each other
+///   assert_eq!(alt_bn128_pairing(&[Pair::zero(), Pair::zero()]), Ok(true))
+/// ```
 pub fn alt_bn128_pairing(pairs: &[Pair]) -> Result<bool> {
     let input = borsh::to_vec(pairs).expect("Serialization to succeed");
     let option = CryptoFunctionOption::AltBn128Pairing;
@@ -313,7 +329,7 @@ fn u256_to_le_bytes(value: U256) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use crate::casper::altbn128::u256_to_le_bytes;
+    use crate::casper::altbn128::{alt_bn128_pairing, u256_to_le_bytes};
     use bnum::types::U256;
     use casper_types::{testing::TestRng, U256 as CasperU256};
     use rand::Rng;
@@ -330,5 +346,10 @@ mod tests {
             let bytes = u256_to_le_bytes(u256);
             assert_eq!(bytes, expected_le_bytes);
         }
+    }
+
+    #[test]
+    fn x() {
+        assert_eq!(alt_bn128_pairing(&[]), Ok(true))
     }
 }

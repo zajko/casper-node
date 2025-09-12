@@ -901,6 +901,7 @@ dependencies = [
  "bitflags 2.9.4",
  "blake2 0.10.6",
  "borsh",
+ "bytes",
  "casper-contract-sdk-sys",
  "hex",
  "num-derive",

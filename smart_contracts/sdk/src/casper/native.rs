@@ -726,235 +726,45 @@ pub fn dispatch_with<T>(stub: Environment, f: impl FnOnce() -> T) -> Result<T, N
 }
 
 mod symbols {
-    // TODO: Figure out how to use for_each_host_function macro here and deal with never type in
-    // casper_return
-    #[no_mangle]
-    /// Read value from a storage available for caller's entity address.
-    pub extern "C" fn casper_read(
-        key_space: u64,
-        key_ptr: *const u8,
-        key_size: usize,
-        info: *mut ::casper_contract_sdk_sys::ReadInfo,
-        alloc: extern "C" fn(usize, *mut core::ffi::c_void) -> *mut u8,
-        alloc_ctx: *const core::ffi::c_void,
-    ) -> u32 {
-        let _name = "casper_read";
-        let _args = (&key_space, &key_ptr, &key_size, &info, &alloc, &alloc_ctx);
-        let _call_result = with_current_environment(|stub| {
-            stub.casper_read(key_space, key_ptr, key_size, info, alloc, alloc_ctx)
-        });
-        crate::casper::native::handle_ret(_call_result)
+    use casper_contract_sdk_sys::for_each_host_function;
+
+    macro_rules! visit_host_function {
+        (@convert_ret $ret:ty) => {
+            <$ret as $crate::imports::WasmerConvert>::Output
+        };
+        (@convert_ret) => { () };
+        ( $( $(#[$cfg:meta])? $vis:vis fn $name:ident $(( $($arg:ident: $argty:ty $(,)*)* ))? $(-> $ret:ty)?;)+) => {
+            $(
+                imports.define($crate::imports::DEFAULT_ENV_NAME, stringify!($name), wasmer::Function::new_typed_with_env(
+                    store,
+                    env,
+                    |
+                        env: FunctionEnvMut<WasmerEnv<S, E>>,
+                        // List all types and statically mapped C types into wasm types
+                        $($($arg: <$argty as $crate::imports::WasmerConvert>::Output,)*)?
+                    | -> VMResult<visit_host_function!(@convert_ret $($ret)?)> {
+                        let wasmer_caller = $crate::WasmerCaller { env };
+
+                        // Dispatch to the actual host function. This also ensures that the return type of host function impl has expected type.
+                        let result: VMResult< visit_host_function!(@convert_ret $($ret)?) > = casper_executor_wasm_host::host::$name(wasmer_caller, $($($arg,)*)?);
+
+                        match result {
+                            Ok(ret) => Ok(ret),
+                            Err(error) => {
+                                warn!(
+                                    "Host function {} failed with error: {error:?}",
+                                    stringify!($name),
+                                );
+
+                                Err(error)
+                            }
+                        }
+                    }
+                ));
+            )*
+        }
     }
-
-    #[no_mangle]
-    pub extern "C" fn casper_write(
-        key_space: u64,
-        key_ptr: *const u8,
-        key_size: usize,
-        value_ptr: *const u8,
-        value_size: usize,
-    ) -> u32 {
-        let _name = "casper_write";
-        let _args = (&key_space, &key_ptr, &key_size, &value_ptr, &value_size);
-        let _call_result = with_current_environment(|stub| {
-            stub.casper_write(key_space, key_ptr, key_size, value_ptr, value_size)
-        });
-        crate::casper::native::handle_ret(_call_result)
-    }
-
-    #[no_mangle]
-    pub extern "C" fn casper_remove(key_space: u64, key_ptr: *const u8, key_size: usize) -> u32 {
-        let _name = "casper_remove";
-        let _args = (&key_space, &key_ptr, &key_size);
-        let _call_result =
-            with_current_environment(|stub| stub.casper_remove(key_space, key_ptr, key_size));
-        crate::casper::native::handle_ret(_call_result)
-    }
-
-    #[no_mangle]
-    pub extern "C" fn casper_print(msg_ptr: *const u8, msg_size: usize) {
-        let _name = "casper_print";
-        let _args = (&msg_ptr, &msg_size);
-        let _call_result = with_current_environment(|stub| stub.casper_print(msg_ptr, msg_size));
-        crate::casper::native::handle_ret(_call_result);
-    }
-
-    use casper_executor_wasm_common::error::HOST_ERROR_SUCCESS;
-
-    use crate::casper::native::LAST_TRAP;
-
-    #[no_mangle]
-    pub extern "C" fn casper_return(flags: u32, data_ptr: *const u8, data_len: usize) {
-        let _name = "casper_return";
-        let _args = (&flags, &data_ptr, &data_len);
-        let _call_result =
-            with_current_environment(|stub| stub.casper_return(flags, data_ptr, data_len));
-        let err = _call_result.unwrap_err(); // SAFE
-        LAST_TRAP.with(|last_trap| last_trap.borrow_mut().replace(err));
-    }
-
-    #[no_mangle]
-    pub extern "C" fn casper_copy_input(
-        alloc: extern "C" fn(usize, *mut core::ffi::c_void) -> *mut u8,
-        alloc_ctx: *const core::ffi::c_void,
-    ) -> *mut u8 {
-        let _name = "casper_copy_input";
-        let _args = (&alloc, &alloc_ctx);
-        let _call_result =
-            with_current_environment(|stub| stub.casper_copy_input(alloc, alloc_ctx));
-        crate::casper::native::handle_ret_with(_call_result, ptr::null_mut)
-    }
-
-    #[no_mangle]
-    pub extern "C" fn casper_create(
-        code_ptr: *const u8,
-        code_size: usize,
-        transferred_value: u64,
-        constructor_ptr: *const u8,
-        constructor_size: usize,
-        input_ptr: *const u8,
-        input_size: usize,
-        seed_ptr: *const u8,
-        seed_size: usize,
-        result_ptr: *mut casper_contract_sdk_sys::CreateResult,
-    ) -> u32 {
-        let _call_result = with_current_environment(|stub| {
-            stub.casper_create(
-                code_ptr,
-                code_size,
-                transferred_value,
-                constructor_ptr,
-                constructor_size,
-                input_ptr,
-                input_size,
-                seed_ptr,
-                seed_size,
-                result_ptr,
-            )
-        });
-        crate::casper::native::handle_ret(_call_result)
-    }
-
-    #[no_mangle]
-    pub extern "C" fn casper_system(
-        _system_contract_opt: u32,
-        _input_ptr: *const u8,
-        _input_size: usize,
-        _alloc: extern "C" fn(usize, *mut core::ffi::c_void) -> *mut u8,
-        _alloc_ctx: *const core::ffi::c_void,
-    ) -> u32 {
-        todo!()
-    }
-
-    #[no_mangle]
-    pub extern "C" fn casper_call(
-        address_ptr: *const u8,
-        address_size: usize,
-        transferred_value: u64,
-        entry_point_ptr: *const u8,
-        entry_point_size: usize,
-        input_ptr: *const u8,
-        input_size: usize,
-        alloc: extern "C" fn(usize, *mut core::ffi::c_void) -> *mut u8, /* For capturing output
-                                                                         * data */
-        alloc_ctx: *const core::ffi::c_void,
-    ) -> u32 {
-        let _call_result = with_current_environment(|stub| {
-            stub.casper_call(
-                address_ptr,
-                address_size,
-                transferred_value,
-                entry_point_ptr,
-                entry_point_size,
-                input_ptr,
-                input_size,
-                alloc,
-                alloc_ctx,
-            )
-        });
-        crate::casper::native::handle_ret(_call_result)
-    }
-
-    #[no_mangle]
-    pub extern "C" fn casper_upgrade(
-        _code_ptr: *const u8,
-        _code_size: usize,
-        _entry_point_ptr: *const u8,
-        _entry_point_size: usize,
-        _input_ptr: *const u8,
-        _input_size: usize,
-    ) -> u32 {
-        todo!()
-    }
-
-    use core::slice;
-    use std::ptr;
-
-    use super::with_current_environment;
-
-    #[no_mangle]
-    pub extern "C" fn casper_env_read(
-        env_path: *const u64,
-        env_path_size: usize,
-        alloc: Option<extern "C" fn(usize, *mut core::ffi::c_void) -> *mut u8>,
-        alloc_ctx: *const core::ffi::c_void,
-    ) -> *mut u8 {
-        let _name = "casper_env_read";
-        let _args = (&env_path, &env_path_size, &alloc, &alloc_ctx);
-        let _call_result = with_current_environment(|stub| {
-            stub.casper_env_read(env_path, env_path_size, alloc, alloc_ctx)
-        });
-        crate::casper::native::handle_ret_with(_call_result, ptr::null_mut)
-    }
-    #[no_mangle]
-    pub extern "C" fn casper_env_balance(
-        _entity_kind: u32,
-        _entity_addr_ptr: *const u8,
-        _entity_addr_len: usize,
-    ) -> u64 {
-        todo!()
-    }
-    #[no_mangle]
-    pub extern "C" fn casper_emit(
-        topic_ptr: *const u8,
-        topic_size: usize,
-        data_ptr: *const u8,
-        data_size: usize,
-    ) -> u32 {
-        let topic = unsafe { slice::from_raw_parts(topic_ptr, topic_size) };
-        let data = unsafe { slice::from_raw_parts(data_ptr, data_size) };
-        let topic = std::str::from_utf8(topic).expect("Valid UTF-8 string");
-        println!("Emitting event with topic: {topic:?} and data: {data:?}");
-        HOST_ERROR_SUCCESS
-    }
-
-    #[no_mangle]
-    pub extern "C" fn casper_env_info(info_ptr: *const u8, info_size: u32) -> u32 {
-        let ret = with_current_environment(|env| env.casper_env_info(info_ptr, info_size));
-        crate::casper::native::handle_ret(ret)
-    }
-
-    #[no_mangle]
-    pub extern "C" fn casper_generic_hash(
-        _in_ptr: *const u8,
-        _in_size: u32,
-        _out_ptr: *const u8,
-        _algorithm: u32,
-    ) -> u32 {
-        todo!()
-    }
-
-    #[no_mangle]
-    pub fn casper_recover_secp256k1(
-        _message_ptr: *const u8,
-        _message_size: usize,
-        _signature_ptr: *const u8,
-        _signature_size: usize,
-        _public_key_ptr: *const u8,
-        _recovery_id: u32,
-    ) -> u32 {
-        todo!()
-    }
+    for_each_host_function!(visit_host_function);
 }
 
 #[cfg(test)]
