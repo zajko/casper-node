@@ -9,7 +9,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crate::linkme::distributed_slice;
+use crate::{casper::native_caller::NativeCaller, linkme::distributed_slice};
 use bytes::Bytes;
 use casper_executor_wasm_common::{
     env_info::EnvInfo,
@@ -122,7 +122,6 @@ impl fmt::Debug for EntryPoint {
 /// contract.
 pub fn invoke_export_by_name(name: &str) {
     let all_entry_points = ENTRY_POINTS.iter().collect::<Vec<_>>();
-
     let exports_by_name: Vec<_> = all_entry_points
         .iter()
         .filter(|export| export.kind.name() == name)
@@ -272,6 +271,11 @@ impl Environment {
         alloc: extern "C" fn(usize, *mut core::ffi::c_void) -> *mut u8,
         alloc_ctx: *const core::ffi::c_void,
     ) -> Result<u32, NativeTrap> {
+        let caller = NativeCaller::new();
+        caller.tablestub.insert(50, alloc);
+        
+        casper_host::casper_read(caller, ... rest ...)
+        /*
         let key_bytes = unsafe { slice::from_raw_parts(key_ptr, key_size) };
         let key_bytes = self.key_prefix(key_bytes);
 
@@ -305,7 +309,7 @@ impl Environment {
                 Ok(HOST_ERROR_SUCCESS)
             }
             None => Ok(HOST_ERROR_NOT_FOUND),
-        }
+        }*/
     }
 
     fn casper_write(
@@ -728,43 +732,20 @@ pub fn dispatch_with<T>(stub: Environment, f: impl FnOnce() -> T) -> Result<T, N
 mod symbols {
     use casper_contract_sdk_sys::for_each_host_function;
 
-    macro_rules! visit_host_function {
-        (@convert_ret $ret:ty) => {
-            <$ret as $crate::imports::WasmerConvert>::Output
-        };
-        (@convert_ret) => { () };
-        ( $( $(#[$cfg:meta])? $vis:vis fn $name:ident $(( $($arg:ident: $argty:ty $(,)*)* ))? $(-> $ret:ty)?;)+) => {
-            $(
-                imports.define($crate::imports::DEFAULT_ENV_NAME, stringify!($name), wasmer::Function::new_typed_with_env(
-                    store,
-                    env,
-                    |
-                        env: FunctionEnvMut<WasmerEnv<S, E>>,
-                        // List all types and statically mapped C types into wasm types
-                        $($($arg: <$argty as $crate::imports::WasmerConvert>::Output,)*)?
-                    | -> VMResult<visit_host_function!(@convert_ret $($ret)?)> {
-                        let wasmer_caller = $crate::WasmerCaller { env };
+    use crate::casper::native::with_current_environment;
 
-                        // Dispatch to the actual host function. This also ensures that the return type of host function impl has expected type.
-                        let result: VMResult< visit_host_function!(@convert_ret $($ret)?) > = casper_executor_wasm_host::host::$name(wasmer_caller, $($($arg,)*)?);
+    #[no_mangle]
+    pub extern "C" fn casper_read(key_space: u64,
+                key_ptr: *const u8,
+                key_size: usize,
+                info: *mut $crate::ReadInfo,
+                alloc: extern "C" fn(usize, *mut core::ffi::c_void) -> *mut u8,
+                alloc_ctx: *const core::ffi::c_void,) -> Result<u32, NativeTrap> {
+                    with_current_environment(|env| {
+                        env.casper_read(key_space, key_ptr, key_size, info, alloc, alloc_ctx)
+                    })
+                }
 
-                        match result {
-                            Ok(ret) => Ok(ret),
-                            Err(error) => {
-                                warn!(
-                                    "Host function {} failed with error: {error:?}",
-                                    stringify!($name),
-                                );
-
-                                Err(error)
-                            }
-                        }
-                    }
-                ));
-            )*
-        }
-    }
-    for_each_host_function!(visit_host_function);
 }
 
 #[cfg(test)]

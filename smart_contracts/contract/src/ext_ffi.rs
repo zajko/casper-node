@@ -3,6 +3,8 @@
 //! Generally should not be used directly.  See the [`contract_api`](crate::contract_api) for
 //! high-level bindings suitable for writing smart contracts.
 
+use core::ptr::null;
+
 #[cfg(doc)]
 use alloc::collections::BTreeMap;
 
@@ -979,4 +981,16 @@ extern "C" {
         runtime_args_size: usize,
         result_size: *mut usize,
     ) -> i32;
+}
+mod x {
+    #[no_mangle]
+    pub extern "C" fn casper_get_block_info(field_idx: u8, dest_ptr: *const u8) {
+        eprintln!("AAAA")
+    }
+}
+#[test]
+fn x() {
+    unsafe {
+        casper_get_block_info(0, null());
+    }
 }
