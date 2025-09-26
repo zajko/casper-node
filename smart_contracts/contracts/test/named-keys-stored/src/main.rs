@@ -12,7 +12,7 @@ use casper_contract::{
 };
 use casper_types::{
     addressable_entity::Parameters, ApiError, CLType, EntityEntryPoint, EntryPointAccess,
-    EntryPointPayment, EntryPointType, EntryPoints, Key, NamedKeys, PackageHash, RuntimeArgs,
+    EntryPointPayment, EntryPointType, EntryPoints, Key, NamedKeys, PackageAddr, RuntimeArgs,
 };
 
 const ENTRY_POINT_CONTRACT: &str = "named_keys_contract";
@@ -100,7 +100,7 @@ pub extern "C" fn named_keys_session() {
 pub extern "C" fn named_keys_contract_to_contract() {
     let package_hash = runtime::get_key(CONTRACT_PACKAGE_HASH_NAME)
         .and_then(Key::into_package_addr)
-        .map(PackageHash::new)
+        .map(PackageAddr::new)
         .unwrap_or_revert();
 
     runtime::call_versioned_contract::<()>(
@@ -115,7 +115,7 @@ pub extern "C" fn named_keys_contract_to_contract() {
 pub extern "C" fn named_keys_session_to_session() {
     let package_hash = runtime::get_key(CONTRACT_PACKAGE_HASH_NAME)
         .and_then(Key::into_package_addr)
-        .map(PackageHash::new)
+        .map(PackageAddr::new)
         .unwrap_or_revert();
 
     runtime::call_versioned_contract::<()>(

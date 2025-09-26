@@ -11,7 +11,7 @@ use casper_types::{
     runtime_args,
     system::{auction, auction::DelegationRate},
     AccessRights, AddressableEntityHash, CLTyped, CLValue, Digest, EraId, HoldBalanceHandling, Key,
-    PackageHash, ProtocolVersion, RuntimeArgs, StoredValue, StoredValueTypeMismatch,
+    PackageAddr, ProtocolVersion, RuntimeArgs, StoredValue, StoredValueTypeMismatch,
     SystemHashRegistry, Timestamp, URef, U512,
 };
 
@@ -126,7 +126,7 @@ fn gh_1470_call_contract_should_verify_group_access() {
         .unwrap();
     let package_hash = package_hash_key
         .into_package_addr()
-        .map(PackageHash::new)
+        .map(PackageAddr::new)
         .unwrap();
 
     let call_contract_request = {
@@ -320,7 +320,7 @@ fn gh_1470_call_contract_should_ignore_optional_args() {
         .unwrap();
     let package_hash = package_hash_key
         .into_package_addr()
-        .map(PackageHash::new)
+        .map(PackageAddr::new)
         .unwrap();
 
     let call_contract_request = {
@@ -386,7 +386,7 @@ fn gh_1470_call_contract_should_not_accept_extra_args() {
         .unwrap();
     let package_hash = package_hash_key
         .into_package_addr()
-        .map(PackageHash::new)
+        .map(PackageAddr::new)
         .unwrap();
 
     let call_contract_request = {
@@ -452,7 +452,7 @@ fn gh_1470_call_contract_should_verify_wrong_argument_types() {
         .unwrap();
     let package_hash = package_hash_key
         .into_package_addr()
-        .map(PackageHash::new)
+        .map(PackageAddr::new)
         .unwrap();
 
     let call_contract_request = {
@@ -551,7 +551,7 @@ fn gh_1470_call_contract_should_verify_wrong_optional_argument_types() {
         .unwrap();
     let package_hash = package_hash_key
         .into_package_addr()
-        .map(PackageHash::new)
+        .map(PackageAddr::new)
         .unwrap();
 
     let call_contract_request = {

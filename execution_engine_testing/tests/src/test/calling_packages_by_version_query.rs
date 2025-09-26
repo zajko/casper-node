@@ -13,7 +13,7 @@ use casper_storage::data_access_layer::GenesisRequest;
 use casper_types::{
     contracts::ProtocolVersionMajor, runtime_args, AddressableEntityHash, ChainspecRegistry,
     EntityVersion, EntityVersionKey, EraId, HashAddr, HoldBalanceHandling, Key, NamedKeys,
-    PackageHash, PricingMode, ProtocolVersion, RuntimeArgs, StoredValue, Timestamp,
+    PackageAddr, PricingMode, ProtocolVersion, RuntimeArgs, StoredValue, Timestamp,
     TransactionEntryPoint, TransactionInvocationTarget, TransactionRuntimeParams,
     TransactionTarget, TransactionV1Hash,
 };
@@ -567,7 +567,7 @@ fn get_contract_hash_for_specific_version(
         }
     };
     let package = builder
-        .get_package(PackageHash::new(*package_hash))
+        .get_package(PackageAddr::new(*package_hash))
         .unwrap();
     let key = EntityVersionKey::new(protocol_version_major, version);
     package.versions().get(&key).map(|x| x.value())

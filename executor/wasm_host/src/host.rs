@@ -36,7 +36,7 @@ use casper_types::{
     ByteCodeHash, ByteCodeKind, CLType, CLValue, ContractRuntimeTag, Digest, EntityAddr,
     EntityEntryPoint, EntityKind, EntryPointAccess, EntryPointAddr, EntryPointPayment,
     EntryPointType, EntryPointValue, HashAddr, HashAlgorithm, HostFunctionV2, Key, Package,
-    PackageHash, ProtocolVersion, Signature, StoredValue, URef,
+    PackageAddr, ProtocolVersion, Signature, StoredValue, URef,
 };
 use either::Either;
 use num_derive::FromPrimitive;
@@ -891,7 +891,7 @@ pub fn casper_create<S: GlobalStateReader + 'static, E: Executor + 'static>(
     };
 
     let addressable_entity = AddressableEntity::new(
-        PackageHash::new(smart_contract_addr),
+        PackageAddr::new(smart_contract_addr),
         ByteCodeHash::new(bytecode_hash),
         ProtocolVersion::V2_0_0,
         main_purse,
@@ -1525,9 +1525,11 @@ pub fn casper_upgrade<S: GlobalStateReader + 'static, E: Executor>(
 
     // 2. Update the code therefore making hash(new_code) != addressable_entity.bytecode_addr (aka
     //    hash(old_code))
-    let bytecode_key = Key::ByteCode(ByteCodeAddr::V2CasperWasm(
-        callee_addressable_entity.byte_code_addr(),
-    ));
+    let bytecode_key = if let Some(bytecode_addr) = callee_addressable_entity.byte_code_addr() {
+        Key::ByteCode(bytecode_addr)
+    } else {
+        return Ok(CALLEE_NOT_CALLABLE);
+    };
 
     metered_write(
         &mut caller,

@@ -45,7 +45,7 @@ use casper_types::{
     BlockTime, ByteCode, ByteCodeAddr, ByteCodeHash, ByteCodeKind, CLValue, Chainspec,
     ChainspecRegistry, Digest, EntityAddr, EntityVersions, EntryPointAddr, EntryPointValue,
     EntryPoints, EraId, FeeHandling, GenesisAccount, GenesisConfig, Groups, HashAddr, Key, Motes,
-    Package, PackageHash, PackageStatus, Phase, ProtocolVersion, PublicKey, RefundHandling,
+    Package, PackageAddr, PackageStatus, Phase, ProtocolVersion, PublicKey, RefundHandling,
     StoredValue, SystemConfig, SystemHashRegistry, Tagged, TimeDiff, URef, WasmConfig, U512,
 };
 

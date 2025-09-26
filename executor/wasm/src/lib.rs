@@ -45,7 +45,7 @@ use casper_types::{
     bytesrepr, AddressableEntity, AuctionCosts, ByteCode, ByteCodeAddr, ByteCodeHash, ByteCodeKind,
     CLType, ContractRuntimeTag, Digest, EntityAddr, EntityKind, EntryPointAccess, EntryPointAddr,
     EntryPointPayment, EntryPointType, EntryPointValue, Gas, Groups, InitiatorAddr, Key,
-    MessageLimits, MintCosts, Package, PackageHash, PackageStatus, Parameters, Phase,
+    MessageLimits, MintCosts, Package, PackageAddr, PackageStatus, Parameters, Phase,
     ProtocolVersion, StorageCosts, StoredValue, TransactionHash, TransactionInvocationTarget, URef,
     WasmV2Config,
 };
@@ -343,7 +343,7 @@ impl ExecutorV2 {
         };
 
         let addressable_entity = AddressableEntity::new(
-            PackageHash::new(smart_contract_addr),
+            PackageAddr::new(smart_contract_addr),
             ByteCodeHash::new(bytecode_hash),
             ProtocolVersion::V2_0_0,
             main_purse,
@@ -593,9 +593,9 @@ impl ExecutorV2 {
                                 );
                             }
                             EntityKind::SmartContract(ContractRuntimeTag::VmCasperV2) => {
-                                Key::ByteCode(ByteCodeAddr::V2CasperWasm(
-                                    addressable_entity.byte_code_addr(),
-                                ))
+                                //The unwrap here is safe because we know that we are in
+                                //SmartContract kind
+                                Key::ByteCode(addressable_entity.byte_code_addr().unwrap())
                             }
                         };
 

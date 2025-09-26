@@ -12,7 +12,7 @@ use casper_execution_engine::{engine_state::Error, execution::ExecError};
 use casper_types::{
     account::AccountHash,
     contracts::{ContractPackageHash, CONTRACT_INITIAL_VERSION},
-    runtime_args, Key, PackageHash, RuntimeArgs, U512,
+    runtime_args, Key, PackageAddr, RuntimeArgs, U512,
 };
 
 use crate::wasm_utils;
@@ -427,7 +427,7 @@ fn should_call_unrestricted_contract_caller_from_different_account() {
 
     let exec_request_2 = ExecuteRequestBuilder::versioned_contract_call_by_hash(
         *DEFAULT_ACCOUNT_ADDR,
-        PackageHash::new(package_hash.value()),
+        PackageAddr::new(package_hash.value()),
         None,
         UNRESTRICTED_CONTRACT_CALLER,
         runtime_args! {
@@ -475,7 +475,7 @@ fn should_call_group_restricted_contract_as_session() {
     // code.
     let exec_request_3 = ExecuteRequestBuilder::versioned_contract_call_by_hash(
         *DEFAULT_ACCOUNT_ADDR,
-        PackageHash::new(package_hash.value()),
+        PackageAddr::new(package_hash.value()),
         None,
         RESTRICTED_CONTRACT_CALLER_AS_SESSION,
         runtime_args! {

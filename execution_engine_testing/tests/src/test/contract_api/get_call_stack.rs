@@ -10,7 +10,7 @@ use casper_types::{
     contracts::{ContractHash, ContractPackageHash},
     runtime_args,
     system::{Caller, CallerInfo},
-    CLValue, EntityAddr, EntryPointType, HashAddr, Key, PackageHash, StoredValue, U512,
+    CLValue, EntityAddr, EntryPointType, HashAddr, Key, PackageAddr, StoredValue, U512,
 };
 
 use get_call_stack_recursive_subcall::{
@@ -159,7 +159,7 @@ impl BuilderExt for LmdbWasmTestBuilder {
                     let package_hash = info
                         .get_field_by_index(1)
                         .map(|val| {
-                            val.to_t::<Option<PackageHash>>()
+                            val.to_t::<Option<PackageAddr>>()
                                 .expect("must convert out of cl_value")
                         })
                         .expect("must have index 1 in fields")
@@ -256,7 +256,7 @@ impl BuilderExt for LmdbWasmTestBuilder {
                     let package_hash = info
                         .get_field_by_index(1)
                         .map(|val| {
-                            val.to_t::<Option<PackageHash>>()
+                            val.to_t::<Option<PackageAddr>>()
                                 .expect("must convert out of cl_value")
                         })
                         .expect("must have index 1 in fields")

@@ -66,7 +66,7 @@ use casper_types::{
     AccessRights, Account, AddressableEntity, AddressableEntityHash, AuctionCosts, BlockGlobalAddr,
     BlockTime, ByteCode, ByteCodeAddr, ByteCodeHash, CLTyped, CLValue, Contract, Digest,
     EntityAddr, EntryPoints, EraId, FeeHandling, Gas, HandlePaymentCosts, HoldBalanceHandling,
-    InitiatorAddr, Key, KeyTag, MintCosts, Motes, Package, PackageHash, Phase,
+    InitiatorAddr, Key, KeyTag, MintCosts, Motes, Package, PackageAddr, Phase,
     ProtocolUpgradeConfig, ProtocolVersion, PublicKey, RefundHandling, StoredValue,
     SystemHashRegistry, TransactionHash, TransactionV1Hash, URef, OS_PAGE_SIZE, U512,
 };
@@ -1628,8 +1628,8 @@ where
         }
     }
 
-    /// Queries for a contract package by `PackageHash`.
-    pub fn get_package(&self, package_hash: PackageHash) -> Option<Package> {
+    /// Queries for a contract package by `PackageAddr`.
+    pub fn get_package(&self, package_hash: PackageAddr) -> Option<Package> {
         let key = if self.chainspec.core_config.enable_addressable_entity {
             Key::SmartContract(package_hash.value())
         } else {

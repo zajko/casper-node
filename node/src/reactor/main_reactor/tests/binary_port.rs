@@ -43,9 +43,8 @@ use casper_types::{
     ByteCodeHash, ByteCodeKind, CLValue, CLValueDictionary, ChainspecRawBytes, Contract,
     ContractRuntimeTag, ContractWasm, ContractWasmHash, DictionaryAddr, Digest, EntityAddr,
     EntityKind, EntityVersions, GlobalStateIdentifier, HashAddr, Key, KeyTag, NextUpgrade, Package,
-    PackageAddr, PackageHash, Peers, ProtocolVersion, PublicKey, Rewards, SecretKey, StoredValue,
-    Transaction, TransactionArgs, TransactionEntryPoint, TransactionRuntimeParams, Transfer, URef,
-    U512,
+    PackageAddr, Peers, ProtocolVersion, PublicKey, Rewards, SecretKey, StoredValue, Transaction,
+    TransactionArgs, TransactionEntryPoint, TransactionRuntimeParams, Transfer, URef, U512,
 };
 use futures::{SinkExt, StreamExt};
 use rand::Rng;
@@ -317,7 +316,7 @@ fn test_effects(rng: &mut TestRng) -> TestEffects {
     effects.push(TransformV2::new(
         Key::AddressableEntity(entity_addr),
         TransformKindV2::Write(StoredValue::AddressableEntity(AddressableEntity::new(
-            PackageHash::new(package_addr),
+            PackageAddr::new(package_addr),
             entity_bytecode_hash,
             ProtocolVersion::V2_0_0,
             main_purse,

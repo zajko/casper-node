@@ -3,7 +3,7 @@ use casper_engine_test_support::{
 };
 use casper_execution_engine::{engine_state::Error, execution::ExecError};
 use casper_types::{
-    runtime_args, AddressableEntityHash, EntityVersionKey, PackageHash, RuntimeArgs,
+    runtime_args, AddressableEntityHash, EntityVersionKey, PackageAddr, RuntimeArgs,
 };
 use gh_1470_regression::PACKAGE_HASH_NAME;
 
@@ -61,7 +61,7 @@ fn should_run_regression() {
         .get(CONTRACT_PACKAGE_HASH_KEY)
         .unwrap()
         .into_package_addr()
-        .map(PackageHash::new)
+        .map(PackageAddr::new)
         .unwrap();
 
     // Versioned contract calls by name

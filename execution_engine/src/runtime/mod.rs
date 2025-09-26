@@ -62,7 +62,7 @@ use casper_types::{
     AccessRights, ApiError, BlockGlobalAddr, BlockTime, ByteCode, ByteCodeAddr, ByteCodeHash,
     ByteCodeKind, CLTyped, CLValue, ContextAccessRights, Contract, ContractWasm, EntityAddr,
     EntityKind, EntityVersion, EntityVersionKey, EntityVersions, Gas, GrantedAccess, Group, Groups,
-    HashAddr, HostFunction, HostFunctionCost, InitiatorAddr, Key, NamedArg, Package, PackageHash,
+    HashAddr, HostFunction, HostFunctionCost, InitiatorAddr, Key, NamedArg, Package, PackageAddr,
     PackageStatus, Phase, PublicKey, RuntimeArgs, RuntimeFootprint, StoredValue, Transfer,
     TransferResult, TransferV2, TransferredTo, URef, DICTIONARY_ITEM_KEY_MAX_LENGTH, U512,
 };
@@ -1429,7 +1429,7 @@ where
     /// Call a version within a package by pushing a stack element onto the frame.
     pub fn call_package_version_with_stack(
         &mut self,
-        contract_package_hash: PackageHash,
+        contract_package_hash: PackageAddr,
         protocol_version_major: Option<ProtocolVersionMajor>,
         version: Option<EntityVersion>,
         entry_point_name: String,
@@ -1524,7 +1524,7 @@ where
     /// types given in the contract header.
     pub fn call_versioned_contract(
         &mut self,
-        contract_package_hash: PackageHash,
+        contract_package_hash: PackageAddr,
         contract_version: Option<EntityVersion>,
         entry_point_name: String,
         args: RuntimeArgs,
@@ -1543,7 +1543,7 @@ where
     /// types given in the contract header.
     pub fn call_package_version(
         &mut self,
-        contract_package_hash: PackageHash,
+        contract_package_hash: PackageAddr,
         protocol_version_major: Option<ProtocolVersionMajor>,
         version: Option<EntityVersion>,
         entry_point_name: String,
@@ -2058,7 +2058,7 @@ where
             let mut stack = self.try_get_stack()?.clone();
 
             let package_hash = match footprint.package_hash() {
-                Some(hash) => PackageHash::new(hash),
+                Some(hash) => PackageAddr::new(hash),
                 None => {
                     return Err(ExecError::UnexpectedStoredValueVariant);
                 }
@@ -2270,7 +2270,7 @@ where
 
     fn call_versioned_contract_host_buffer(
         &mut self,
-        contract_package_hash: PackageHash,
+        contract_package_hash: PackageAddr,
         contract_version: Option<EntityVersion>,
         entry_point_name: String,
         args_bytes: &[u8],
@@ -2308,7 +2308,7 @@ where
 
     fn call_package_version_host_buffer(
         &mut self,
-        contract_package_hash: PackageHash,
+        contract_package_hash: PackageAddr,
         protocol_version_major: Option<ProtocolVersionMajor>,
         contract_version: Option<EntityVersion>,
         entry_point_name: String,
@@ -2484,7 +2484,7 @@ where
 
     fn create_contract_user_group_by_contract_package(
         &mut self,
-        contract_package_hash: PackageHash,
+        contract_package_hash: PackageAddr,
         label: String,
         num_new_urefs: u32,
         mut existing_urefs: BTreeSet<URef>,
@@ -2558,7 +2558,7 @@ where
 
     fn create_contract_user_group(
         &mut self,
-        contract_package_hash: PackageHash,
+        contract_package_hash: PackageAddr,
         label: String,
         num_new_urefs: u32,
         mut existing_urefs: BTreeSet<URef>,
@@ -2640,7 +2640,7 @@ where
     #[allow(clippy::too_many_arguments)]
     fn add_contract_version(
         &mut self,
-        package_hash: PackageHash,
+        package_hash: PackageAddr,
         version_ptr: u32,
         entry_points: EntryPoints,
         named_keys: NamedKeys,
@@ -2703,7 +2703,7 @@ where
 
         // Return an error if the contract is locked and has some version associated with it.
         if contract_package.is_locked() && version.is_some() {
-            return Err(ExecError::LockedEntity(PackageHash::new(
+            return Err(ExecError::LockedEntity(PackageAddr::new(
                 contract_package_hash,
             )));
         }
@@ -2820,7 +2820,7 @@ where
     #[allow(clippy::too_many_arguments)]
     fn add_contract_version_by_package(
         &mut self,
-        package_hash: PackageHash,
+        package_hash: PackageAddr,
         version_ptr: u32,
         entry_points: EntryPoints,
         mut named_keys: NamedKeys,
@@ -3059,7 +3059,7 @@ where
 
                 let access_key = match self
                     .context
-                    .read_gs(&Key::Hash(previous_entity.package_hash().value()))?
+                    .read_gs(&Key::Hash(previous_entity.package().value()))?
                 {
                     Some(StoredValue::ContractPackage(contract_package)) => {
                         contract_package.access_key()
@@ -3118,7 +3118,7 @@ where
 
     fn disable_contract_version(
         &mut self,
-        contract_package_hash: PackageHash,
+        contract_package_hash: PackageAddr,
         contract_hash: AddressableEntityHash,
     ) -> Result<Result<(), ApiError>, ExecError> {
         if self.context.engine_config().enable_entity {
@@ -3149,7 +3149,7 @@ where
                 .get_validated_contract_package(contract_package_hash.value())?;
 
             if contract_package.is_locked() {
-                return Err(ExecError::LockedEntity(PackageHash::new(
+                return Err(ExecError::LockedEntity(PackageAddr::new(
                     contract_package_hash.value(),
                 )));
             }
@@ -3168,7 +3168,7 @@ where
 
     fn enable_contract_version(
         &mut self,
-        contract_package_hash: PackageHash,
+        contract_package_hash: PackageAddr,
         contract_hash: AddressableEntityHash,
     ) -> Result<Result<(), ApiError>, ExecError> {
         if self.context.engine_config().enable_entity {
@@ -3199,7 +3199,7 @@ where
                 .get_validated_contract_package(contract_package_hash.value())?;
 
             if contract_package.is_locked() {
-                return Err(ExecError::LockedEntity(PackageHash::new(
+                return Err(ExecError::LockedEntity(PackageAddr::new(
                     contract_package_hash.value(),
                 )));
             }
@@ -3710,7 +3710,7 @@ where
                 let protocol_version = self.context.protocol_version();
                 let byte_code_hash = ByteCodeHash::default();
                 let entity_hash = AddressableEntityHash::new(target.value());
-                let package_hash = PackageHash::new(self.context.new_hash_address()?);
+                let package_hash = PackageAddr::new(self.context.new_hash_address()?);
 
                 let associated_keys = AssociatedKeys::new(target, Weight::new(1));
 
@@ -4179,7 +4179,7 @@ where
     /// Remove a user group from access to a contract
     fn remove_contract_user_group(
         &mut self,
-        package_key: PackageHash,
+        package_key: PackageAddr,
         label: Group,
     ) -> Result<Result<(), ApiError>, ExecError> {
         if self.context.engine_config().enable_entity {
@@ -4376,7 +4376,7 @@ where
         urefs_ptr: u32,
         urefs_size: u32,
     ) -> Result<Result<(), ApiError>, ExecError> {
-        let contract_package_hash: PackageHash = self.t_from_mem(package_ptr, package_size)?;
+        let contract_package_hash: PackageAddr = self.t_from_mem(package_ptr, package_size)?;
         let label: String = self.t_from_mem(label_ptr, label_size)?;
         let urefs: BTreeSet<URef> = self.t_from_mem(urefs_ptr, urefs_size)?;
 

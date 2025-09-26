@@ -605,7 +605,7 @@ impl TestScenario {
                 }
                 ContractPackageScenario::MissingPackageAtHash => {
                     let txn = TransactionV1Builder::new_targeting_package(
-                        PackageHash::new(PackageAddr::default()),
+                        PackageAddr::default(),
                         None,
                         None,
                         "call",
@@ -620,7 +620,7 @@ impl TestScenario {
                 }
                 ContractPackageScenario::MissingContractVersion => {
                     let txn = TransactionV1Builder::new_targeting_package(
-                        PackageHash::new(PackageAddr::default()),
+                        PackageAddr::default(),
                         Some(6),
                         Some(2),
                         "call",
@@ -819,7 +819,7 @@ impl TestScenario {
             TestScenario::VmCasperV2ByPackageHash => {
                 let txn = TransactionV1Builder::new_targeting_stored(
                     TransactionInvocationTarget::ByPackageHash {
-                        addr: [1; 32],
+                        addr: [1; 32].into(),
                         version: None,
                         protocol_version_major: None,
                     },
@@ -839,7 +839,7 @@ impl TestScenario {
             TestScenario::V1ByPackage(hash_or_name, maybe_version, maybe_protocol_version, ..) => {
                 let id = match hash_or_name {
                     HashOrName::Hash => TransactionInvocationTarget::ByPackageHash {
-                        addr: [1; 32],
+                        addr: [1; 32].into(),
                         version: *maybe_version,
                         protocol_version_major: *maybe_protocol_version,
                     },
