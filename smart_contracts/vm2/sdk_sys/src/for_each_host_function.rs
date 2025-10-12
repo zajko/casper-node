@@ -41,8 +41,8 @@ macro_rules! for_each_host_function {
                 seed_size: usize,
                 result_ptr: *mut $crate::CreateResult,
             ) -> u32;
-            pub fn casper_system(
-                system_contract_opt: u32,
+            pub fn casper_ffi(
+                ffi_opt: u32,
                 input_ptr: *const u8,
                 input_size: usize,
                 alloc: extern "C" fn(usize, *mut core::ffi::c_void) -> *mut u8, // For capturing output data

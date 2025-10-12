@@ -844,7 +844,7 @@ mod symbols {
     }
 
     #[no_mangle]
-    pub extern "C" fn casper_system(
+    pub extern "C" fn casper_ffi(
         _system_contract_opt: u32,
         _input_ptr: *const u8,
         _input_size: usize,

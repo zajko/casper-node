@@ -125,7 +125,7 @@ pub mod exports {
 
         match &input {
             Some(input) => {
-                let (_output, _result) = casper_system(option.into(), &input);
+                let (_output, _result) = casper_ffi(option.into(), &input);
             }
             None => ret(ReturnFlags::ROLLBACK, None),
         }

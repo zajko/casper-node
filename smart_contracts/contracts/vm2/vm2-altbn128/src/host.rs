@@ -108,7 +108,7 @@ const ALL_ONES: [u8; 32] = [0x11; 32];
 
 pub(crate) fn alt_bn128_pairing_raw(input: &[u8]) -> altbn128::Result<bool> {
     let option = CryptoFunctionOption::AltBn128Pairing;
-    let (output, result) = casper_system(option.into(), &input);
+    let (output, result) = casper_ffi(option.into(), &input);
     let _ = result.unwrap();
     match output {
         Some(raw) => {

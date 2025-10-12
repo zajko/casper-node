@@ -19,7 +19,8 @@ use casper_executor_wasm_common::{
 };
 use casper_executor_wasm_interface::{
     executor::{
-        CryptoMethods, ExecuteError, ExecuteRequestBuilder, ExecuteResult, ExecutionKind, Executor,
+        ControlMethods, CryptoMethods, EmitMethods, ExecuteError, ExecuteRequestBuilder,
+        ExecuteResult, ExecutionKind, Executor, GlobalStateMethods, IOMethods,
     },
     u32_from_host_result, Caller, FatalHostError, VMError, VMResult,
 };
@@ -57,7 +58,7 @@ use casper_executor_wasm_common::{
     error::{HOST_ERROR_CL_VALUE, HOST_LOCKED_PACKAGE, HOST_NO_ACTIVE_CONTRACT},
 };
 use casper_executor_wasm_interface::executor::{
-    AuctionMethods, ExecuteRequest, MintMethods, SystemMenu,
+    AuctionMethods, ExecuteRequest, FFIMenu, MintMethods,
 };
 use casper_types::contracts::{ContractHash, ContractPackage, ContractPackageHash, EntryPoints};
 use keccak_asm::Digest as KeccakDigest;
@@ -1083,9 +1084,9 @@ pub fn casper_create<S: GlobalStateReader + 'static>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn casper_system<S: GlobalStateReader + 'static>(
+pub fn casper_ffi<S: GlobalStateReader + 'static>(
     mut caller: impl Caller<Context = Context<S>>,
-    system_contract_opt: u32,
+    ffi_opt: u32,
     input_ptr: u32,
     input_len: u32,
     cb_alloc: u32,
@@ -1096,24 +1097,24 @@ pub fn casper_system<S: GlobalStateReader + 'static>(
         return Err(FatalHostError::AttemptWriteInRestricted.into());
     }
     // get option so we can determine cost, or charge if invalid
-    let option: SystemMenu = match TryFrom::try_from(system_contract_opt) {
+    let option: FFIMenu = match TryFrom::try_from(ffi_opt) {
         Ok(option) => option,
         Err(_) => {
             // the following can produce a VMError::OutOfGas error
             let penalty_cost = caller.context().baseline_motes_amount;
             charge_gas(&mut caller, penalty_cost)?;
-            return Err(FatalHostError::InvalidSystemOption(system_contract_opt).into());
+            return Err(FatalHostError::InvalidSystemOption(ffi_opt).into());
         }
     };
 
     let cost = match &option {
-        SystemMenu::Mint(mint_opt) => match mint_opt {
+        FFIMenu::Mint(mint_opt) => match mint_opt {
             MintMethods::Burn => caller.context().mint_costs.burn as u64,
             MintMethods::Transfer | MintMethods::TransferPurse => {
                 caller.context().mint_costs.transfer as u64
             }
         },
-        SystemMenu::Auction(auction_opt) => match auction_opt {
+        FFIMenu::Auction(auction_opt) => match auction_opt {
             AuctionMethods::Activate => caller.context().auction_costs.activate_bid,
             AuctionMethods::Bid => caller.context().auction_costs.add_bid,
             AuctionMethods::Withdraw => caller.context().auction_costs.withdraw_bid,
@@ -1124,7 +1125,7 @@ pub fn casper_system<S: GlobalStateReader + 'static>(
             AuctionMethods::CancelReservation => caller.context().auction_costs.cancel_reservations,
             AuctionMethods::ChangePublicKey => caller.context().auction_costs.change_bid_public_key,
         },
-        SystemMenu::Crypto(crypto_methods) => {
+        FFIMenu::Crypto(crypto_methods) => {
             let fn_cost = match crypto_methods {
                 CryptoMethods::AltBn128Add => {
                     caller.context().config.host_function_costs().alt_bn128_add
@@ -1147,10 +1148,66 @@ pub fn casper_system<S: GlobalStateReader + 'static>(
                 return Err(VMError::OutOfGas);
             };
             u64::try_from(cost.value()).map_err(|err| {
-                error!("Couldn't execute host function due to cost calculation overflow. Details: {err}");
-                VMError::Fatal(FatalHostError::TypeConversion)
-            })?
+                    error!("Couldn't execute host function due to cost calculation overflow. Details: {err}");
+                    VMError::Fatal(FatalHostError::TypeConversion)
+                })?
         }
+        FFIMenu::Emit(emit_methods) => match emit_methods {
+            EmitMethods::PrintStd => {
+                let print_cost = caller.context().config.host_function_costs().print;
+                charge_host_function_call(
+                    &mut caller,
+                    &print_cost,
+                    [u64::from(message_ptr), u64::from(message_size)],
+                )?;
+            }
+            EmitMethods::Native => {
+                if caller.context().sandboxed {
+                    return Err(FatalHostError::AttemptWriteInRestricted.into());
+                }
+                let emit_host_function = caller.context().config.host_function_costs().emit;
+                charge_host_function_call(
+                    &mut caller,
+                    &emit_host_function,
+                    [
+                        u64::from(topic_name_ptr),
+                        u64::from(topic_name_size),
+                        u64::from(payload_ptr),
+                        u64::from(payload_size),
+                    ],
+                )?;
+            }
+        },
+        FFIMenu::GlobalState(global_state_methods) => match global_state_methods {
+            GlobalStateMethods::Read => {
+                let read_cost = caller.context().config.host_function_costs().read;
+                charge_host_function_call(
+                    &mut caller,
+                    &read_cost,
+                    [
+                        key_tag,
+                        u64::from(key_ptr),
+                        u64::from(key_size),
+                        u64::from(info_ptr),
+                        u64::from(cb_alloc),
+                        u64::from(alloc_ctx),
+                    ],
+                )?;
+            }
+            GlobalStateMethods::Write => todo!(),
+            GlobalStateMethods::Remove => todo!(),
+            GlobalStateMethods::GetBalance => todo!(),
+            GlobalStateMethods::GetInfo => todo!(),
+        },
+        FFIMenu::Control(control_methods) => match control_methods {
+            ControlMethods::Create => todo!(),
+            ControlMethods::Call => todo!(),
+            ControlMethods::Upgrade => todo!(),
+        },
+        FFIMenu::IO(io_methods) => match io_methods {
+            IOMethods::Return => todo!(),
+            IOMethods::CopyInput => todo!(),
+        },
     };
     // the following can produce a VMError::OutOfGas error
     charge_gas(&mut caller, cost)?;

@@ -6,6 +6,7 @@ pub mod native;
 use crate::abi::{CasperABI, EnumVariant};
 
 use crate::{
+    Message, ToCallData,
     compat::types::{CLType, CLTyped},
     log,
     prelude::{
@@ -17,22 +18,22 @@ use crate::{
     },
     reserve_vec_space,
     serializers::borsh::{BorshDeserialize, BorshSerialize},
-    types::{Address, CallError, HashAlgorithm, PublicKey},
-    Message, ToCallData,
+    types::{Address, CallError, EmitFunctionOption, HashAlgorithm, PublicKey},
 };
 
 use crate::types::{EntityAddr, SystemContractOption};
-use casper_contract_sdk_sys::{casper_env_info, EnvInfo};
+use casper_contract_sdk_sys::EnvInfo;
 use casper_executor_wasm_common::{
-    error::{result_from_code, HostResult, HOST_ERROR_SUCCESS},
+    error::{HOST_ERROR_SUCCESS, HostResult, result_from_code},
     flags::ReturnFlags,
     keyspace::{Keyspace, KeyspaceTag},
 };
 
 /// Print a message.
 #[inline]
-pub fn print(msg: &str) {
-    unsafe { casper_contract_sdk_sys::casper_print(msg.as_ptr(), msg.len()) };
+pub fn print(msg: &str) -> Result<(), CallError> {
+    let option = EmitFunctionOption::PrintStd;
+    call_ffi(option.into(), msg.as_bytes(), Some(|_| None))
 }
 
 pub enum Alloc<F: FnOnce(usize) -> Option<ptr::NonNull<u8>>> {
@@ -258,14 +259,14 @@ pub(crate) fn call_into<F: FnOnce(usize) -> Option<ptr::NonNull<u8>>>(
     call_result_from_code(result_code)
 }
 
-pub(crate) fn call_into_system<F: FnOnce(usize) -> Option<ptr::NonNull<u8>>>(
-    system_contract_opt: u32,
+pub(crate) fn call_ffi<F: FnOnce(usize) -> Option<ptr::NonNull<u8>>>(
+    ffi_opt: u32,
     input_data: &[u8],
     alloc: Option<F>,
 ) -> Result<(), CallError> {
     let result_code = unsafe {
-        casper_contract_sdk_sys::casper_system(
-            system_contract_opt,
+        casper_contract_sdk_sys::casper_ffi(
+            ffi_opt,
             input_data.as_ptr(),
             input_data.len(),
             alloc_callback::<F>,
@@ -283,14 +284,11 @@ fn call_result_from_code(result_code: u32) -> Result<(), CallError> {
     }
 }
 
-/// Call a system contract.
-pub fn casper_system(
-    system_contract_opt: u32,
-    input_data: &[u8],
-) -> (Option<Vec<u8>>, Result<(), CallError>) {
+/// Call a host function.
+pub fn casper_ffi(ffi_opt: u32, input_data: &[u8]) -> (Option<Vec<u8>>, Result<(), CallError>) {
     let mut output = None;
     let result_code = call_into_system(
-        system_contract_opt,
+        ffi_opt,
         input_data,
         Some(|size| {
             let mut vec = Vec::new();
@@ -600,7 +598,7 @@ pub fn transfer(target_account: &Address, amount: u64) -> Result<(), CallError> 
         Err(_err) => return Err(CallError::CalleeTrapped),
     };
     let opt = SystemContractOption::Transfer.into();
-    let (_ret, result) = casper_system(opt, &bytes);
+    let (_ret, result) = casper_ffi(opt, &bytes);
     result
 }
 

@@ -35,7 +35,7 @@ use thiserror::Error;
 use tracing::{debug, error};
 
 use casper_executor_wasm_interface::executor::{
-    AuctionMethods, ExecuteError, ExecuteResult, MintMethods, SystemMenu,
+    AuctionMethods, ExecuteError, ExecuteResult, FFIMenu, MintMethods,
 };
 use casper_types::bytesrepr::ToBytes;
 
@@ -259,7 +259,7 @@ pub fn native_exec<A, T: ToBytes, R: GlobalStateReader + 'static>(
     initiator: AccountHash,
     caller_key: Key,
     input: Bytes,
-    system_menu_selection: SystemMenu,
+    system_menu_selection: FFIMenu,
 ) -> Result<ExecuteResult, ExecuteError> {
     let (caller_key, entity_addr) = if let Key::Account(account_hash) = caller_key {
         (caller_key, EntityAddr::Account(account_hash.value()))
@@ -298,7 +298,7 @@ pub fn native_exec<A, T: ToBytes, R: GlobalStateReader + 'static>(
     };
 
     let ret: Result<Option<Bytes>, DispatchError> = match system_menu_selection {
-        SystemMenu::Auction(method) => match method {
+        FFIMenu::Auction(method) => match method {
             AuctionMethods::Activate => {
                 let ret = bytesrepr::deserialize_from_slice::<&Bytes, (PublicKey,)>(&input);
                 if let Err(err) = &ret {
@@ -621,7 +621,7 @@ pub fn native_exec<A, T: ToBytes, R: GlobalStateReader + 'static>(
                 .map(|_| None)
             }
         },
-        SystemMenu::Mint(method) => match method {
+        FFIMenu::Mint(method) => match method {
             MintMethods::Burn => {
                 // VM2 only allows userland burning from caller's main purse
                 let ret = bytesrepr::deserialize_from_slice::<&Bytes, (u64,)>(&input);
@@ -738,7 +738,7 @@ pub fn native_exec<A, T: ToBytes, R: GlobalStateReader + 'static>(
                 }
             }
         },
-        SystemMenu::Crypto(crypto_method) => match crypto_method {
+        FFIMenu::Crypto(crypto_method) => match crypto_method {
             CryptoMethods::AltBn128Add => {
                 let (x1_bytes, y1_bytes, x2_bytes, y2_bytes) = bytesrepr::deserialize_from_slice::<
                     &Bytes,

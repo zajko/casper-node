@@ -23,7 +23,7 @@ use casper_executor_wasm_host::{
 use casper_executor_wasm_interface::{
     executor::{
         ExecuteError, ExecuteRequest, ExecuteRequestBuilder, ExecuteResult,
-        ExecuteWithProviderError, ExecuteWithProviderResult, ExecutionKind, Executor, SystemMenu,
+        ExecuteWithProviderError, ExecuteWithProviderResult, ExecutionKind, Executor, FFIMenu,
     },
     sandboxed_execution::{
         SandboxedExecutionError, SandboxedExecutionRequest, SandboxedExecutionResult,
@@ -531,7 +531,7 @@ impl ExecutorV2 {
 
     fn execute_system_contract<R: GlobalStateReader + 'static>(
         &self,
-        menu_selection: SystemMenu,
+        menu_selection: FFIMenu,
         tracking_copy: TrackingCopy<R>,
         execute_request: ExecuteRequest,
     ) -> Result<ExecuteResult, ExecuteError> {

@@ -200,7 +200,7 @@ pub type Result<T> = core::result::Result<T, AltBn128Error>;
 pub fn alt_bn128_add(x1: &G1, y1: &G1, x2: &G1, y2: &G1) -> Result<(Fq, Fq)> {
     let input = borsh::to_vec(&(x1, y1, x2, y2)).expect("Serialization to succeed");
     let option = CryptoFunctionOption::AltBn128Add;
-    let (output, result) = casper_system(option.into(), &input);
+    let (output, result) = casper_ffi(option.into(), &input);
     result.map_err(|_err| AltBn128Error::CallError)?;
     match output {
         Some(raw) => {
@@ -217,7 +217,7 @@ pub fn alt_bn128_add(x1: &G1, y1: &G1, x2: &G1, y2: &G1) -> Result<(Fq, Fq)> {
 pub fn alt_bn128_mul(x: &G1, y: &G1, scalar: &Fr) -> Result<(Fq, Fq)> {
     let input = borsh::to_vec(&(x, y, scalar)).expect("Serialization to succeed");
     let option = CryptoFunctionOption::AltBn128Multiply;
-    let (output, result) = casper_system(option.into(), &input);
+    let (output, result) = casper_ffi(option.into(), &input);
     result.map_err(|_err| AltBn128Error::CallError)?;
     match output {
         Some(raw) => {
@@ -280,7 +280,7 @@ pub fn alt_bn128_pairing(pairs: &[Pair]) -> Result<bool> {
     let input = borsh::to_vec(pairs).expect("Serialization to succeed");
     let option = CryptoFunctionOption::AltBn128Pairing;
 
-    let (output, result) = casper_system(option.into(), &input);
+    let (output, result) = casper_ffi(option.into(), &input);
     result.map_err(|_err| AltBn128Error::CallError)?;
     match output {
         Some(raw) => {

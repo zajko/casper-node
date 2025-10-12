@@ -371,6 +371,33 @@ impl ExecuteWithProviderResult {
     }
 }
 
+/// Available options for interacting with the emitting functions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmitMethods {
+    PrintStd,
+    Native,
+}
+
+/// Available options for interacting with functions manipulating
+/// and fetching data from global state
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GlobalStateMethods {
+    Read,
+    Write,
+    Remove,
+    GetBalance,
+    GetInfo,
+}
+
+/// Available options for interacting with functions interacting
+/// with other contracts and control flow
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlMethods {
+    Create,
+    Call,
+    Upgrade,
+}
+
 /// Available options for interacting with the system mint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MintMethods {
@@ -393,7 +420,7 @@ pub enum AuctionMethods {
     ChangePublicKey,
 }
 
-/// Available options for interacting with host-side cryptographic functions. For
+/// Available options for interacting with host-side cryptographic functions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CryptoMethods {
     AltBn128Add,
@@ -401,48 +428,71 @@ pub enum CryptoMethods {
     AltBn128Pairing,
 }
 
+/// Available options for interacting with host-side cryptographic functions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IOMethods {
+    Return,
+    CopyInput,
+}
+
 /// Available options for interacting with the system.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SystemMenu {
+pub enum FFIMenu {
     Mint(MintMethods),
     Auction(AuctionMethods),
     Crypto(CryptoMethods),
+    Emit(EmitMethods),
+    GlobalState(GlobalStateMethods),
+    Control(ControlMethods),
+    IO(IOMethods),
 }
 
-impl TryFrom<u32> for SystemMenu {
+impl TryFrom<u32> for FFIMenu {
     type Error = ();
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(SystemMenu::Mint(MintMethods::Transfer)),
-            1 => Ok(SystemMenu::Mint(MintMethods::TransferPurse)),
-            2 => Ok(SystemMenu::Mint(MintMethods::Burn)),
-            100 => Ok(SystemMenu::Auction(AuctionMethods::Activate)),
-            101 => Ok(SystemMenu::Auction(AuctionMethods::Bid)),
-            102 => Ok(SystemMenu::Auction(AuctionMethods::Withdraw)),
-            103 => Ok(SystemMenu::Auction(AuctionMethods::Delegate)),
-            104 => Ok(SystemMenu::Auction(AuctionMethods::Undelegate)),
-            105 => Ok(SystemMenu::Auction(AuctionMethods::Redelegate)),
-            106 => Ok(SystemMenu::Auction(AuctionMethods::AddReservation)),
-            107 => Ok(SystemMenu::Auction(AuctionMethods::CancelReservation)),
-            108 => Ok(SystemMenu::Auction(AuctionMethods::ChangePublicKey)),
-            200 => Ok(SystemMenu::Crypto(CryptoMethods::AltBn128Add)),
-            201 => Ok(SystemMenu::Crypto(CryptoMethods::AltBn128Multiply)),
-            202 => Ok(SystemMenu::Crypto(CryptoMethods::AltBn128Pairing)),
+            0 => Ok(FFIMenu::Mint(MintMethods::Transfer)),
+            1 => Ok(FFIMenu::Mint(MintMethods::TransferPurse)),
+            2 => Ok(FFIMenu::Mint(MintMethods::Burn)),
+            100 => Ok(FFIMenu::Auction(AuctionMethods::Activate)),
+            101 => Ok(FFIMenu::Auction(AuctionMethods::Bid)),
+            102 => Ok(FFIMenu::Auction(AuctionMethods::Withdraw)),
+            103 => Ok(FFIMenu::Auction(AuctionMethods::Delegate)),
+            104 => Ok(FFIMenu::Auction(AuctionMethods::Undelegate)),
+            105 => Ok(FFIMenu::Auction(AuctionMethods::Redelegate)),
+            106 => Ok(FFIMenu::Auction(AuctionMethods::AddReservation)),
+            107 => Ok(FFIMenu::Auction(AuctionMethods::CancelReservation)),
+            108 => Ok(FFIMenu::Auction(AuctionMethods::ChangePublicKey)),
+            200 => Ok(FFIMenu::Crypto(CryptoMethods::AltBn128Add)),
+            201 => Ok(FFIMenu::Crypto(CryptoMethods::AltBn128Multiply)),
+            202 => Ok(FFIMenu::Crypto(CryptoMethods::AltBn128Pairing)),
+            300 => Ok(FFIMenu::Emit(EmitMethods::PrintStd)),
+            301 => Ok(FFIMenu::Emit(EmitMethods::Native)),
+            400 => Ok(FFIMenu::GlobalState(GlobalStateMethods::Read)),
+            401 => Ok(FFIMenu::GlobalState(GlobalStateMethods::Write)),
+            402 => Ok(FFIMenu::GlobalState(GlobalStateMethods::Remove)),
+            403 => Ok(FFIMenu::GlobalState(GlobalStateMethods::GetBalance)),
+            404 => Ok(FFIMenu::GlobalState(GlobalStateMethods::GetInfo)),
+            500 => Ok(FFIMenu::Control(ControlMethods::Create)),
+            501 => Ok(FFIMenu::Control(ControlMethods::Call)),
+            502 => Ok(FFIMenu::Control(ControlMethods::Upgrade)),
+            600 => Ok(FFIMenu::IO(IOMethods::Return)),
+            601 => Ok(FFIMenu::IO(IOMethods::CopyInput)),
             _ => Err(()),
         }
     }
 }
 
-impl From<SystemMenu> for u32 {
-    fn from(value: SystemMenu) -> u32 {
+impl From<FFIMenu> for u32 {
+    fn from(value: FFIMenu) -> u32 {
         match value {
-            SystemMenu::Mint(mint) => match mint {
+            FFIMenu::Mint(mint) => match mint {
                 MintMethods::Transfer => 0,
                 MintMethods::TransferPurse => 1,
                 MintMethods::Burn => 2,
             },
-            SystemMenu::Auction(auction) => match auction {
+            FFIMenu::Auction(auction) => match auction {
                 AuctionMethods::Activate => 100,
                 AuctionMethods::Bid => 101,
                 AuctionMethods::Withdraw => 102,
@@ -453,10 +503,30 @@ impl From<SystemMenu> for u32 {
                 AuctionMethods::CancelReservation => 107,
                 AuctionMethods::ChangePublicKey => 108,
             },
-            SystemMenu::Crypto(crypto) => match crypto {
+            FFIMenu::Crypto(crypto) => match crypto {
                 CryptoMethods::AltBn128Add => 200,
                 CryptoMethods::AltBn128Multiply => 201,
                 CryptoMethods::AltBn128Pairing => 202,
+            },
+            FFIMenu::Emit(emit) => match emit {
+                EmitMethods::PrintStd => 300,
+                EmitMethods::Native => 301,
+            },
+            FFIMenu::GlobalState(global_state) => match global_state {
+                GlobalStateMethods::Read => 400,
+                GlobalStateMethods::Write => 401,
+                GlobalStateMethods::Remove => 402,
+                GlobalStateMethods::GetBalance => 403,
+                GlobalStateMethods::GetInfo => 404,
+            },
+            FFIMenu::Control(control) => match control {
+                ControlMethods::Create => 500,
+                ControlMethods::Call => 501,
+                ControlMethods::Upgrade => 502,
+            },
+            FFIMenu::IO(io) => match io {
+                IOMethods::Return => 600,
+                IOMethods::CopyInput => 601,
             },
         }
     }
@@ -475,12 +545,12 @@ pub enum ExecutionKind {
         entry_point: String,
     },
     /// Interact with the system.
-    System(SystemMenu),
+    System(FFIMenu),
 }
 
 impl ExecutionKind {
     /// Returns system menu selection if relevant.
-    pub fn system_menu_selection(&self) -> Option<SystemMenu> {
+    pub fn system_menu_selection(&self) -> Option<FFIMenu> {
         match self {
             ExecutionKind::SessionBytes(_) | ExecutionKind::Stored { .. } => None,
             ExecutionKind::System(menu) => Some(menu.clone()),

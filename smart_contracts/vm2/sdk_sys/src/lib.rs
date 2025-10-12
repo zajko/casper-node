@@ -1,5 +1,32 @@
 pub mod for_each_host_function;
 
+extern "C" {
+    pub fn casper_ffi(
+        function_opt: u32,
+        input_ptr: *const u8,
+        input_size: usize,
+        alloc: extern "C" fn(usize, *mut core::ffi::c_void) -> *mut u8, /* For capturing output
+                                                                         * data */
+        alloc_ctx: *const core::ffi::c_void,
+    ) -> u32;
+}
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct EnvInfo {
+    pub protocol_version_major: u32,
+    pub protocol_version_minor: u32,
+    pub protocol_version_patch: u32,
+    pub block_height: u64,
+    pub block_time: u64,
+    pub parent_block_hash: [u8; 32],
+    pub transferred_value: u64,
+    pub caller_addr: [u8; 32],
+    pub caller_kind: u32,
+    pub callee_addr: [u8; 32],
+    pub callee_kind: u32,
+}
+
 /// Signature of a function pointer that a host understands.
 pub type Fptr = extern "C" fn() -> ();
 
@@ -25,21 +52,7 @@ pub struct UpgradeResult {
     pub version: u32,
 }
 
-#[derive(Debug)]
-#[repr(C)]
-pub struct EnvInfo {
-    pub block_time: u64,
-    pub transferred_value: u64,
-    pub caller_addr: [u8; 32],
-    pub caller_kind: u32,
-    pub callee_addr: [u8; 32],
-    pub callee_kind: u32,
-    pub protocol_version_major: u32,
-    pub protocol_version_minor: u32,
-    pub protocol_version_patch: u32,
-    pub parent_block_hash: [u8; 32],
-    pub block_height: u64,
-}
+extern "C" {
 
 macro_rules! visit_host_function {
     ( $( $(#[$cfg:meta])? $vis:vis fn $name:ident $(( $($arg:ident: $argty:ty $(,)?)* ))? $(-> $ret:ty)?;)+) => {
