@@ -976,7 +976,7 @@ mod tests {
     #[test]
     fn foo() {
         dispatch(|| {
-            casper::print("Hello");
+            let _ = casper::print("Hello");
             casper::write(Keyspace::Context(b"test"), b"value 1").unwrap();
 
             let change_context_1 =

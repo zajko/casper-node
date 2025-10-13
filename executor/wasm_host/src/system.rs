@@ -18,7 +18,10 @@ mod withdraw_bid;
 
 use bytes::Bytes;
 use casper_executor_wasm_common::error::CallError;
-use casper_executor_wasm_interface::{executor::CryptoMethods, FatalHostError, GasUsage};
+use casper_executor_wasm_interface::{
+    executor::{ControlMethods, CryptoMethods, EmitMethods, GlobalStateMethods, IOMethods},
+    FatalHostError, GasUsage,
+};
 use casper_storage::{
     global_state::GlobalStateReader,
     system::runtime_native::{Id, RuntimeNative},
@@ -810,6 +813,38 @@ pub fn native_exec<A, T: ToBytes, R: GlobalStateReader + 'static>(
                     Err(_) => Err(DispatchError::Api(ApiError::Formatting)),
                 }
             }
+        },
+        FFIMenu::Emit(emit_methods) => match emit_methods {
+            EmitMethods::PrintStd => {
+                let msg = String::from_utf8_lossy(&input);
+                eprintln!("⛓️ {msg}");
+                Ok(None)
+            }
+            EmitMethods::Native => {
+                let (topic_name, payload) =
+                    bytesrepr::deserialize_from_slice::<&Bytes, (String, Vec<u8>)>(&input)
+                        .map_err(|_err| ExecuteError::Fatal(FatalHostError::TypeConversion))?;
+                emit_native()
+                if topic_name.len() > caller.context().message_limits.max_topic_name_size {
+                    return Ok(HOST_ERROR_TOPIC_TOO_LONG);
+                }
+            }
+        },
+        FFIMenu::GlobalState(global_state_methods) => match global_state_methods {
+            GlobalStateMethods::Read => todo!(),
+            GlobalStateMethods::Write => todo!(),
+            GlobalStateMethods::Remove => todo!(),
+            GlobalStateMethods::GetBalance => todo!(),
+            GlobalStateMethods::GetInfo => todo!(),
+        },
+        FFIMenu::Control(control_methods) => match control_methods {
+            ControlMethods::Create => todo!(),
+            ControlMethods::Call => todo!(),
+            ControlMethods::Upgrade => todo!(),
+        },
+        FFIMenu::IO(io_methods) => match io_methods {
+            IOMethods::Return => todo!(),
+            IOMethods::CopyInput => todo!(),
         },
     };
 

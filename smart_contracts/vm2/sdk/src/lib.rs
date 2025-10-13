@@ -38,7 +38,7 @@ cfg_if::cfg_if! {
             SET_HOOK.call_once(|| {
                 std::panic::set_hook(Box::new(|panic_info| {
                     let msg = panic_info.to_string();
-                    casper::print(&msg);
+                    let _ = casper::print(&msg);
                 }));
             });
         }

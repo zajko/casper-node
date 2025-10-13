@@ -1,4 +1,6 @@
 pub(crate) mod altbn128;
+pub(crate) mod emit;
+pub(crate) mod global_state;
 use std::{borrow::Cow, collections::BTreeMap, num::NonZeroU32, sync::Arc};
 
 use bytes::Bytes;
@@ -20,7 +22,7 @@ use casper_executor_wasm_common::{
 use casper_executor_wasm_interface::{
     executor::{
         ControlMethods, CryptoMethods, EmitMethods, ExecuteError, ExecuteRequestBuilder,
-        ExecuteResult, ExecutionKind, Executor, GlobalStateMethods, IOMethods,
+        ExecuteResult, ExecutionKind, Executor, GlobalStateMethods, IOMethods, SystemContractCall,
     },
     u32_from_host_result, Caller, FatalHostError, VMError, VMResult,
 };
@@ -36,8 +38,8 @@ use casper_types::{
     AccessRights, AddressableEntity, BlockGlobalAddr, BlockHash, BlockTime, ByteCode, ByteCodeAddr,
     ByteCodeHash, ByteCodeKind, CLType, CLValue, Contract, ContractRuntimeTag, ContractWasmHash,
     Digest, EntityAddr, EntityKind, EntryPointPayment, EntryPointValue, HashAddr, HashAlgorithm,
-    HostFunctionV2, Key, NamedKeys, Package, PackageAddr, ProtocolVersion, Signature, StoredValue,
-    URef,
+    HostFFIFunctionCost, Key, NamedKeys, Package, PackageAddr, ProtocolVersion, Signature,
+    StoredValue, URef,
 };
 use either::Either;
 use num_derive::FromPrimitive;
@@ -45,8 +47,12 @@ use num_traits::FromPrimitive;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    abi::{CreateResult, EnvInfo, ReadInfo},
+    abi::{CreateResult, EnvInfo},
     context::Context,
+    host::{
+        emit::{emit, print_std},
+        global_state::{host_read, host_write},
+    },
     system,
 };
 use blake2::{
@@ -109,13 +115,13 @@ fn charge_gas_storage<S: GlobalStateReader>(
 /// Consumes a set amount of gas for the specified host function and weights
 fn charge_host_function_call<S, const N: usize>(
     caller: &mut impl Caller<Context = Context<S>>,
-    host_function: &HostFunctionV2<[u64; N]>,
-    weights: [u64; N],
+    host_function: &HostFFIFunctionCost,
+    size_bytes: usize,
 ) -> VMResult<()>
 where
     S: GlobalStateReader,
 {
-    let Some(cost) = host_function.calculate_gas_cost(weights) else {
+    let Some(cost) = host_function.calculate_gas_cost(size_bytes as u64) else {
         // Overflowing gas calculation means gas limit was exceeded
         return Err(VMError::OutOfGas);
     };
@@ -139,171 +145,6 @@ fn metered_write<S: GlobalStateReader>(
     Ok(())
 }
 
-/// Write value under a key.
-pub fn casper_write<S: GlobalStateReader>(
-    mut caller: impl Caller<Context = Context<S>>,
-    key_space: u64,
-    key_ptr: u32,
-    key_size: u32,
-    value_ptr: u32,
-    value_size: u32,
-) -> VMResult<u32> {
-    // In restricted mode, writing is not allowed
-    if caller.context().sandboxed {
-        return Err(FatalHostError::AttemptWriteInRestricted.into());
-    }
-
-    let write_cost = caller.context().config.host_function_costs().write;
-    charge_host_function_call(
-        &mut caller,
-        &write_cost,
-        [
-            key_space,
-            u64::from(key_ptr),
-            u64::from(key_size),
-            u64::from(value_ptr),
-            u64::from(value_size),
-        ],
-    )?;
-
-    let keyspace_tag = match KeyspaceTag::from_u64(key_space) {
-        Some(keyspace_tag) => keyspace_tag,
-        None => {
-            // Unknown keyspace received, return error
-            return Ok(HOST_ERROR_NOT_FOUND);
-        }
-    };
-
-    let key_payload_bytes =
-        caller.memory_read(key_ptr.wrapped_try_into()?, key_size.wrapped_try_into()?)?;
-
-    let keyspace = match keyspace_tag {
-        KeyspaceTag::State => Keyspace::State,
-        KeyspaceTag::Context => Keyspace::Context(&key_payload_bytes),
-        KeyspaceTag::NamedKey => {
-            let key_name = match std::str::from_utf8(&key_payload_bytes) {
-                Ok(key_name) => key_name,
-                Err(_) => {
-                    return Ok(HOST_ERROR_INVALID_DATA);
-                }
-            };
-
-            Keyspace::NamedKey(key_name)
-        }
-        KeyspaceTag::AllNamedKeys => Keyspace::AllNamedKeys,
-    };
-
-    let global_state_key = match keyspace_to_global_state_key(caller.context(), keyspace) {
-        Some(global_state_key) => global_state_key,
-        None => {
-            // Unknown keyspace received, return error
-            return Ok(HOST_ERROR_NOT_FOUND);
-        }
-    };
-
-    let value = caller.memory_read(
-        value_ptr.wrapped_try_into()?,
-        value_size.wrapped_try_into()?,
-    )?;
-
-    let stored_value = match keyspace {
-        Keyspace::State | Keyspace::Context(_) => {
-            let cl_value_any = CLValue::from_components(CLType::Any, value);
-            StoredValue::CLValue(cl_value_any)
-        }
-        Keyspace::NamedKey(name) => {
-            // NamedKey points to a URef which holds CLValue::Any bytes
-            let maybe_stored_value = caller
-                .context_mut()
-                .tracking_copy
-                .read(&global_state_key)
-                .map_err(|_| FatalHostError::TrackingCopy)?;
-
-            let stored_value = match maybe_stored_value {
-                Some(StoredValue::NamedKey(existing_named_key)) => {
-                    let uref_to_use =
-                        if let Ok(Key::URef(existing_uref)) = existing_named_key.get_key() {
-                            existing_uref
-                        } else {
-                            let mut address_generator = caller.context().address_generator.write();
-                            address_generator.new_uref(AccessRights::NONE)
-                        };
-
-                    // Point the named key to the URef
-                    let named_key = Key::URef(uref_to_use);
-                    let key_name = name.to_string();
-                    let Ok(named_key_value) =
-                        NamedKeyValue::from_concrete_values(named_key, key_name)
-                    else {
-                        return Ok(HOST_ERROR_INVALID_DATA);
-                    };
-
-                    StoredValue::NamedKey(named_key_value)
-                }
-                Some(StoredValue::Contract(mut contract)) => {
-                    let uref = match contract.named_keys().get(name) {
-                        Some(Key::URef(uref)) => *uref,
-                        Some(_) => return Ok(HOST_ERROR_INVALID_INPUT),
-                        None => {
-                            let mut address_generator = caller.context().address_generator.write();
-                            address_generator.new_uref(AccessRights::NONE)
-                        }
-                    };
-
-                    // Write payload bytes under the URef as CLValue::Any
-                    let cl_value_any = CLValue::from_components(CLType::Any, value.clone());
-                    metered_write(
-                        &mut caller,
-                        Key::URef(uref),
-                        StoredValue::CLValue(cl_value_any),
-                    )?;
-
-                    let named_keys = {
-                        let mut ret = BTreeMap::new();
-                        ret.insert(name.to_string(), Key::URef(uref));
-                        NamedKeys::from(ret)
-                    };
-                    contract.named_keys_append(named_keys);
-
-                    StoredValue::Contract(contract)
-                }
-                Some(_) => return Ok(HOST_ERROR_NOT_FOUND),
-                None => {
-                    let uref = {
-                        let mut address_generator = caller.context().address_generator.write();
-                        address_generator.new_uref(AccessRights::NONE)
-                    };
-                    // Write payload bytes under the URef as CLValue::Any
-                    let cl_value_any = CLValue::from_components(CLType::Any, value.clone());
-                    metered_write(
-                        &mut caller,
-                        Key::URef(uref),
-                        StoredValue::CLValue(cl_value_any),
-                    )?;
-
-                    // Point the named key to the URef
-                    let named_key = Key::URef(uref);
-                    let key_name = name.to_string();
-                    let Ok(named_key_value) =
-                        NamedKeyValue::from_concrete_values(named_key, key_name)
-                    else {
-                        return Ok(HOST_ERROR_INVALID_DATA);
-                    };
-
-                    StoredValue::NamedKey(named_key_value)
-                }
-            };
-
-            stored_value
-        }
-        Keyspace::AllNamedKeys => return Ok(HOST_ERROR_INVALID_INPUT),
-    };
-
-    metered_write(&mut caller, global_state_key, stored_value)?;
-
-    Ok(HOST_ERROR_SUCCESS)
-}
-
 /// Remove value under a key.
 ///
 /// This produces a transformation of Prune to the global state. Keep in mind that technically the
@@ -323,12 +164,8 @@ pub fn casper_remove<S: GlobalStateReader>(
         return Err(FatalHostError::AttemptWriteInRestricted.into());
     }
 
-    let remove_cost = caller.context().config.host_function_costs().remove;
-    charge_host_function_call(
-        &mut caller,
-        &remove_cost,
-        [key_space, u64::from(key_ptr), u64::from(key_size)],
-    )?;
+    let remove_cost = caller.context().config.host_ffi_opt_costs().remove;
+    panic!("casper_remove should not be used anymore");
 
     let keyspace_tag = match KeyspaceTag::from_u64(key_space) {
         Some(keyspace_tag) => keyspace_tag,
@@ -400,261 +237,6 @@ pub fn casper_remove<S: GlobalStateReader>(
     Ok(HOST_ERROR_SUCCESS)
 }
 
-pub fn casper_print<S: GlobalStateReader>(
-    mut caller: impl Caller<Context = Context<S>>,
-    message_ptr: u32,
-    message_size: u32,
-) -> VMResult<()> {
-    let print_cost = caller.context().config.host_function_costs().print;
-    charge_host_function_call(
-        &mut caller,
-        &print_cost,
-        [u64::from(message_ptr), u64::from(message_size)],
-    )?;
-
-    let vec = caller.memory_read(
-        message_ptr.wrapped_try_into()?,
-        message_size.wrapped_try_into()?,
-    )?;
-    let msg = String::from_utf8_lossy(&vec);
-    eprintln!("⛓️ {msg}");
-    Ok(())
-}
-
-/// Write value under a key.
-pub fn casper_read<S: GlobalStateReader>(
-    mut caller: impl Caller<Context = Context<S>>,
-    key_tag: u64,
-    key_ptr: u32,
-    key_size: u32,
-    info_ptr: u32,
-    cb_alloc: u32,
-    alloc_ctx: u32,
-) -> VMResult<u32> {
-    let read_cost = caller.context().config.host_function_costs().read;
-    charge_host_function_call(
-        &mut caller,
-        &read_cost,
-        [
-            key_tag,
-            u64::from(key_ptr),
-            u64::from(key_size),
-            u64::from(info_ptr),
-            u64::from(cb_alloc),
-            u64::from(alloc_ctx),
-        ],
-    )?;
-
-    let keyspace_tag = match KeyspaceTag::from_u64(key_tag) {
-        Some(keyspace_tag) => keyspace_tag,
-        None => {
-            // Unknown keyspace received, return error
-            return Ok(HOST_ERROR_INVALID_INPUT);
-        }
-    };
-
-    let key_payload_bytes =
-        caller.memory_read(key_ptr.wrapped_try_into()?, key_size.wrapped_try_into()?)?;
-
-    let keyspace = match keyspace_tag {
-        KeyspaceTag::State => Keyspace::State,
-        KeyspaceTag::Context => Keyspace::Context(&key_payload_bytes),
-        KeyspaceTag::NamedKey => {
-            let key_name = match std::str::from_utf8(&key_payload_bytes) {
-                Ok(key_name) => key_name,
-                Err(_) => {
-                    return Ok(HOST_ERROR_INVALID_DATA);
-                }
-            };
-
-            Keyspace::NamedKey(key_name)
-        }
-        KeyspaceTag::AllNamedKeys => Keyspace::AllNamedKeys,
-    };
-
-    let global_state_key = match keyspace_to_global_state_key(caller.context(), keyspace) {
-        Some(global_state_key) => global_state_key,
-        None => {
-            // Unknown keyspace received, return error
-            return Ok(HOST_ERROR_NOT_FOUND);
-        }
-    };
-
-    let global_state_read_result = caller.context_mut().tracking_copy.read(&global_state_key);
-    let global_state_raw_bytes: Cow<[u8]> = match global_state_read_result {
-        Ok(Some(StoredValue::CLValue(cl_value))) => {
-            let CLType::Any = cl_value.cl_type() else {
-                return Err(FatalHostError::TypeConversion)?;
-            };
-            Cow::Owned(cl_value.inner_bytes().to_owned())
-        }
-        Ok(Some(StoredValue::NamedKey(named_key_value))) => {
-            // Dereference named key to its URef and return the underlying Any bytes
-            let Ok(Key::URef(uref)) = named_key_value.get_key() else {
-                return Ok(HOST_ERROR_INVALID_DATA);
-            };
-
-            match caller.context_mut().tracking_copy.read(&Key::URef(uref)) {
-                Ok(Some(StoredValue::CLValue(cl_value))) => {
-                    let CLType::Any = cl_value.cl_type() else {
-                        return Ok(HOST_ERROR_INVALID_DATA);
-                    };
-                    Cow::Owned(cl_value.inner_bytes().to_owned())
-                }
-                Ok(Some(_)) => {
-                    return Ok(HOST_ERROR_INVALID_DATA);
-                }
-                Ok(None) => {
-                    return Ok(HOST_ERROR_NOT_FOUND);
-                }
-                Err(_error) => {
-                    return Err(FatalHostError::TrackingCopy.into());
-                }
-            }
-        }
-        Ok(Some(StoredValue::Contract(contract))) => match keyspace {
-            Keyspace::NamedKey(name) => {
-                let Some(Key::URef(uref)) = contract.named_keys().get(name) else {
-                    return Ok(HOST_ERROR_INVALID_DATA);
-                };
-
-                match caller.context_mut().tracking_copy.read(&Key::URef(*uref)) {
-                    Ok(Some(StoredValue::CLValue(cl_value))) => {
-                        let CLType::Any = cl_value.cl_type() else {
-                            return Ok(HOST_ERROR_INVALID_DATA);
-                        };
-                        Cow::Owned(cl_value.inner_bytes().to_owned())
-                    }
-                    Ok(Some(_)) => {
-                        return Ok(HOST_ERROR_INVALID_DATA);
-                    }
-                    Ok(None) => {
-                        return Ok(HOST_ERROR_NOT_FOUND);
-                    }
-                    Err(_error) => {
-                        return Err(FatalHostError::TrackingCopy.into());
-                    }
-                }
-            }
-            Keyspace::AllNamedKeys => match contract.take_named_keys().to_bytes() {
-                Ok(bytes) => Cow::Owned(bytes),
-                Err(_) => return Ok(HOST_ERROR_INVALID_INPUT),
-            },
-            _ => {
-                error!(?keyspace, "unsupported keyspace");
-                return Ok(HOST_ERROR_INVALID_INPUT);
-            }
-        },
-        Ok(Some(StoredValue::AddressableEntity(_))) => {
-            if let Keyspace::AllNamedKeys = keyspace {
-                let entity_addr = context_to_entity_addr(caller.context());
-
-                let named_keys = caller
-                    .context_mut()
-                    .tracking_copy
-                    .get_named_keys(entity_addr)
-                    .map(|named_keys| named_keys.to_bytes());
-
-                match named_keys {
-                    Ok(Ok(bytes)) => Cow::Owned(bytes),
-                    Ok(_) | Err(_) => return Ok(HOST_ERROR_INVALID_INPUT),
-                }
-            } else {
-                return Ok(HOST_ERROR_INVALID_INPUT);
-            }
-        }
-        Ok(Some(StoredValue::EntryPoint(EntryPointValue::V1CasperVm(entry_point)))) => {
-            match entry_point.entry_point_payment() {
-                EntryPointPayment::Caller => Cow::Borrowed(&[ENTRY_POINT_PAYMENT_CALLER]),
-                EntryPointPayment::DirectInvocationOnly => {
-                    Cow::Borrowed(&[ENTRY_POINT_PAYMENT_DIRECT_INVOCATION_ONLY])
-                }
-                EntryPointPayment::SelfOnward => Cow::Borrowed(&[ENTRY_POINT_PAYMENT_SELF_ONWARD]),
-            }
-        }
-        Ok(Some(stored_value)) => {
-            // TODO: Backwards compatibility with old EE, although it's not clear if we should
-            // do it at the storage level. Since new VM has storage isolated
-            // from the Wasm (i.e. we have Keyspace on the wasm which gets
-            // converted to a global state `Key`). I think if we were to pursue
-            // this we'd add a new `Keyspace` enum variant for each old
-            // VM supported Key types (i.e. URef, Dictionary perhaps) for some period of time,
-            // then deprecate this.
-            todo!("Unsupported {stored_value:?}")
-        }
-        Ok(None) => return Ok(HOST_ERROR_NOT_FOUND), // Entry does not exist
-        Err(error) => {
-            // To protect the network against potential non-determinism (i.e. one validator runs
-            // out of space or just faces I/O issues that other validators may
-            // not have) we're simply aborting the process, hoping that once the
-            // node goes back online issues are resolved on the validator side.
-            // TODO: We should signal this to the contract runtime somehow, and
-            // let validator nodes skip execution.
-            error!(?error, "Error while reading from storage; aborting");
-            panic!("Error while reading from storage; aborting key={global_state_key:?} error={error:?}")
-        }
-    };
-
-    let out_ptr: u32 = if cb_alloc != 0 {
-        caller.alloc(cb_alloc, global_state_raw_bytes.len(), alloc_ctx)?
-    } else {
-        // treats alloc_ctx as data
-        alloc_ctx
-    };
-
-    let read_info = ReadInfo {
-        data_ptr: out_ptr,
-        data_size: global_state_raw_bytes.len().wrapped_try_into()?,
-    };
-
-    let read_info_bytes =
-        borsh::to_vec(&read_info).map_err(|_| VMError::Fatal(FatalHostError::Serialization))?;
-    caller.memory_write(info_ptr.wrapped_try_into()?, &read_info_bytes)?;
-    if out_ptr != 0 {
-        caller.memory_write(out_ptr.wrapped_try_into()?, &global_state_raw_bytes)?;
-    }
-    Ok(HOST_ERROR_SUCCESS)
-}
-
-fn keyspace_to_global_state_key<S: GlobalStateReader>(
-    context: &Context<S>,
-    keyspace: Keyspace<'_>,
-) -> Option<Key> {
-    let entity_addr = context_to_entity_addr(context);
-    let ae_enabled = context.tracking_copy.addressable_entity_enabled();
-
-    match keyspace {
-        Keyspace::State => Some(Key::State(entity_addr)),
-        Keyspace::Context(bytes) => {
-            let digest = Digest::hash(bytes);
-            Some(Key::NamedKey(NamedKeyAddr::new_named_key_entry(
-                entity_addr,
-                digest.value(),
-            )))
-        }
-        Keyspace::NamedKey(payload) => {
-            let digest = Digest::hash(payload.as_bytes());
-            Some(Key::NamedKey(NamedKeyAddr::new_named_key_entry(
-                entity_addr,
-                digest.value(),
-            )))
-        }
-        Keyspace::AllNamedKeys => {
-            if ae_enabled {
-                Some(Key::AddressableEntity(entity_addr))
-            } else {
-                match entity_addr {
-                    EntityAddr::Account(hash_addr) => {
-                        Some(Key::Account(AccountHash::new(hash_addr)))
-                    }
-                    EntityAddr::SmartContract(hash_addr) => Some(Key::Hash(hash_addr)),
-                    _ => None,
-                }
-            }
-        }
-    }
-}
-
 fn context_to_entity_addr<S: GlobalStateReader>(context: &Context<S>) -> EntityAddr {
     match context.callee {
         Key::Account(account_hash) => EntityAddr::new_account(account_hash.value()),
@@ -681,18 +263,8 @@ pub fn casper_copy_input<S: GlobalStateReader>(
         alloc_ctx
     };
 
-    let copy_input_cost = caller.context().config.host_function_costs().copy_input;
-    charge_host_function_call(
-        &mut caller,
-        &copy_input_cost,
-        [
-            u64::from(out_ptr),
-            input.len().try_into().map_err(|err| {
-                error!("Failed to convert u64 to usize. Details: {err}");
-                ExecuteError::Fatal(FatalHostError::TypeConversion)
-            })?,
-        ],
-    )?;
+    let copy_input_cost = caller.context().config.host_ffi_opt_costs().copy_input;
+    panic!("casper_copy_input should not be used anymore");
 
     if out_ptr == 0 {
         Ok(out_ptr)
@@ -709,12 +281,8 @@ pub fn casper_return<S: GlobalStateReader>(
     data_ptr: u32,
     data_len: u32,
 ) -> VMResult<()> {
-    let ret_cost = caller.context().config.host_function_costs().ret;
-    charge_host_function_call(
-        &mut caller,
-        &ret_cost,
-        [u64::from(data_ptr), u64::from(data_len)],
-    )?;
+    let ret_cost = caller.context().config.host_ffi_opt_costs().ret;
+    panic!("casper_return should not be used anymore");
 
     let maybe_flags = ReturnFlags::from_bits(flags);
     let flags = match maybe_flags {
@@ -763,23 +331,8 @@ pub fn casper_create<S: GlobalStateReader + 'static>(
         return Err(FatalHostError::AttemptWriteInRestricted.into());
     }
 
-    let create_cost = caller.context().config.host_function_costs().create;
-    charge_host_function_call(
-        &mut caller,
-        &create_cost,
-        [
-            u64::from(code_ptr),
-            u64::from(code_len),
-            transferred_value,
-            u64::from(entry_point_ptr),
-            u64::from(entry_point_len),
-            u64::from(input_ptr),
-            u64::from(input_len),
-            u64::from(seed_ptr),
-            u64::from(seed_len),
-            u64::from(result_ptr),
-        ],
-    )?;
+    let create_cost = caller.context().config.host_ffi_opt_costs().create;
+    panic!("casper_create should not be used anymore");
 
     let code = if code_ptr != 0 {
         caller
@@ -1092,10 +645,6 @@ pub fn casper_ffi<S: GlobalStateReader + 'static>(
     cb_alloc: u32,
     cb_ctx: u32,
 ) -> VMResult<u32> {
-    // In restricted mode, contract calls are not allowed
-    if caller.context().sandboxed {
-        return Err(FatalHostError::AttemptWriteInRestricted.into());
-    }
     // get option so we can determine cost, or charge if invalid
     let option: FFIMenu = match TryFrom::try_from(ffi_opt) {
         Ok(option) => option,
@@ -1103,128 +652,95 @@ pub fn casper_ffi<S: GlobalStateReader + 'static>(
             // the following can produce a VMError::OutOfGas error
             let penalty_cost = caller.context().baseline_motes_amount;
             charge_gas(&mut caller, penalty_cost)?;
-            return Err(FatalHostError::InvalidSystemOption(ffi_opt).into());
+            return Err(VMError::Execute(ExecuteError::InvalidFFIOption(ffi_opt)));
         }
     };
+    if caller.context().sandboxed && !option.allowed_in_sandbox() {
+        return Err(VMError::Execute(ExecuteError::AttemptWriteInRestricted));
+    }
 
-    let cost = match &option {
-        FFIMenu::Mint(mint_opt) => match mint_opt {
-            MintMethods::Burn => caller.context().mint_costs.burn as u64,
-            MintMethods::Transfer | MintMethods::TransferPurse => {
-                caller.context().mint_costs.transfer as u64
-            }
-        },
-        FFIMenu::Auction(auction_opt) => match auction_opt {
-            AuctionMethods::Activate => caller.context().auction_costs.activate_bid,
-            AuctionMethods::Bid => caller.context().auction_costs.add_bid,
-            AuctionMethods::Withdraw => caller.context().auction_costs.withdraw_bid,
-            AuctionMethods::Delegate => caller.context().auction_costs.delegate,
-            AuctionMethods::Undelegate => caller.context().auction_costs.undelegate,
-            AuctionMethods::Redelegate => caller.context().auction_costs.redelegate,
-            AuctionMethods::AddReservation => caller.context().auction_costs.add_reservations,
-            AuctionMethods::CancelReservation => caller.context().auction_costs.cancel_reservations,
-            AuctionMethods::ChangePublicKey => caller.context().auction_costs.change_bid_public_key,
-        },
-        FFIMenu::Crypto(crypto_methods) => {
-            let fn_cost = match crypto_methods {
-                CryptoMethods::AltBn128Add => {
-                    caller.context().config.host_function_costs().alt_bn128_add
-                }
-                CryptoMethods::AltBn128Multiply => {
-                    caller.context().config.host_function_costs().alt_bn128_mul
-                }
-                CryptoMethods::AltBn128Pairing => {
-                    caller
-                        .context()
-                        .config
-                        .host_function_costs()
-                        .alt_bn128_pairing
-                }
-            };
-            let Some(cost) =
-                fn_cost.calculate_gas_cost([u64::from(input_ptr), u64::from(input_len)])
-            else {
-                // Overflowing gas calculation means gas limit was exceeded
-                return Err(VMError::OutOfGas);
-            };
-            u64::try_from(cost.value()).map_err(|err| {
-                    error!("Couldn't execute host function due to cost calculation overflow. Details: {err}");
-                    VMError::Fatal(FatalHostError::TypeConversion)
-                })?
-        }
-        FFIMenu::Emit(emit_methods) => match emit_methods {
-            EmitMethods::PrintStd => {
-                let print_cost = caller.context().config.host_function_costs().print;
-                charge_host_function_call(
-                    &mut caller,
-                    &print_cost,
-                    [u64::from(message_ptr), u64::from(message_size)],
-                )?;
-            }
-            EmitMethods::Native => {
-                if caller.context().sandboxed {
-                    return Err(FatalHostError::AttemptWriteInRestricted.into());
-                }
-                let emit_host_function = caller.context().config.host_function_costs().emit;
-                charge_host_function_call(
-                    &mut caller,
-                    &emit_host_function,
-                    [
-                        u64::from(topic_name_ptr),
-                        u64::from(topic_name_size),
-                        u64::from(payload_ptr),
-                        u64::from(payload_size),
-                    ],
-                )?;
-            }
-        },
-        FFIMenu::GlobalState(global_state_methods) => match global_state_methods {
-            GlobalStateMethods::Read => {
-                let read_cost = caller.context().config.host_function_costs().read;
-                charge_host_function_call(
-                    &mut caller,
-                    &read_cost,
-                    [
-                        key_tag,
-                        u64::from(key_ptr),
-                        u64::from(key_size),
-                        u64::from(info_ptr),
-                        u64::from(cb_alloc),
-                        u64::from(alloc_ctx),
-                    ],
-                )?;
-            }
-            GlobalStateMethods::Write => todo!(),
-            GlobalStateMethods::Remove => todo!(),
-            GlobalStateMethods::GetBalance => todo!(),
-            GlobalStateMethods::GetInfo => todo!(),
-        },
-        FFIMenu::Control(control_methods) => match control_methods {
-            ControlMethods::Create => todo!(),
-            ControlMethods::Call => todo!(),
-            ControlMethods::Upgrade => todo!(),
-        },
-        FFIMenu::IO(io_methods) => match io_methods {
-            IOMethods::Return => todo!(),
-            IOMethods::CopyInput => todo!(),
-        },
+    let call_cost_definition = match caller.context().ffi_call_costs.get(&ffi_opt) {
+        Some(ffi_call_cost) => ffi_call_cost,
+        None => return Err(VMError::Fatal(FatalHostError::UnableToValueFFICall)),
     };
+    let Some(cost) = call_cost_definition.calculate_gas_cost(input_len as u64) else {
+        // Overflowing gas calculation means gas limit was exceeded
+        return Err(VMError::OutOfGas);
+    };
+    let cost = u64::try_from(cost.value()).map_err(|err| {
+        error!("Couldn't execute host function due to cost calculation overflow. Details: {err}");
+        VMError::Fatal(FatalHostError::TypeConversion)
+    })?;
+
     // the following can produce a VMError::OutOfGas error
     charge_gas(&mut caller, cost)?;
 
     let input_data: Bytes = caller.memory_read(input_ptr, input_len as _)?.into();
 
-    // Limit the call to remaining gas.
-    let gas_limit = caller
-        .get_remaining_points()?
-        .try_into_remaining()
-        .map_err(|_| FatalHostError::TypeConversion)?;
+    let (output_bytes, exit_code) = match option {
+        FFIMenu::Mint(mint_method) => {
+            let system_contract_call_opt = SystemContractCall::Mint(mint_method);
+            // Limit the call to remaining gas.
+            let gas_limit = caller
+                .get_remaining_points()?
+                .try_into_remaining()
+                .map_err(|_| FatalHostError::TypeConversion)?;
 
+            handle_as_contract_call(caller, system_contract_call_opt, input_data, gas_limit)
+        }
+        FFIMenu::Auction(auction_method) => {
+            let system_contract_call_opt = SystemContractCall::Auction(auction_method);
+            // Limit the call to remaining gas.
+            let gas_limit = caller
+                .get_remaining_points()?
+                .try_into_remaining()
+                .map_err(|_| FatalHostError::TypeConversion)?;
+
+            handle_as_contract_call(caller, system_contract_call_opt, input_data, gas_limit)
+        }
+        FFIMenu::Crypto(crypto_methods) => todo!(),
+        FFIMenu::Emit(emit_methods) => match emit_methods {
+            EmitMethods::PrintStd => print_std(input_data).map(|code| (None, code)),
+            EmitMethods::Native => emit(&mut caller, input_data).map(|code| (None, code)),
+        },
+        FFIMenu::GlobalState(global_state_methods) => match global_state_methods {
+            GlobalStateMethods::Read => host_read(&mut caller, input_bytes),
+            GlobalStateMethods::Write => {
+                host_write(&mut caller, input_bytes).map(|code| (None, code))
+            }
+            GlobalStateMethods::Remove => todo!(),
+            GlobalStateMethods::GetBalance => todo!(),
+            GlobalStateMethods::GetInfo => todo!(),
+        },
+        FFIMenu::Control(control_methods) => todo!(),
+        FFIMenu::IO(iomethods) => todo!(),
+    }?;
+
+    if let Some(output) = output_bytes {
+        let out_ptr: u32 = if cb_alloc != 0 {
+            caller.alloc(cb_alloc, output.len(), cb_ctx)?
+        } else {
+            // treats alloc_ctx as data
+            cb_ctx
+        };
+        if out_ptr != 0 {
+            caller.memory_write(out_ptr.wrapped_try_into()?, &output)?;
+        }
+    }
+    Ok(exit_code)
+}
+
+fn handle_as_contract_call<S: GlobalStateReader + 'static>(
+    caller: impl Caller<Context = Context<S>>,
+    system_call_option: SystemContractCall,
+    input_data: Bytes,
+    gas_limit: u64,
+) -> VMResult<(Option<Bytes>, u32)> {
     let execute_request = ExecuteRequestBuilder::default()
         .with_initiator(caller.context().initiator)
         .with_caller_key(caller.context().callee)
         .with_gas_limit(gas_limit)
-        .with_execution_kind(ExecutionKind::System(option))
+        .with_execution_kind(ExecutionKind::System(system_call_option))
         .with_input(input_data)
         .with_transaction_hash(caller.context().transaction_hash)
         .with_shared_address_generator(Arc::clone(&caller.context().address_generator))
@@ -1238,7 +754,7 @@ pub fn casper_ffi<S: GlobalStateReader + 'static>(
         .build()
         .map_err(FatalHostError::ExecuteRequestBuildFailure)?;
 
-    exec(caller, execute_request, cb_alloc, cb_ctx)
+    exec(caller, execute_request)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1259,22 +775,8 @@ pub fn casper_call<S: GlobalStateReader + 'static>(
         return Err(FatalHostError::AttemptWriteInRestricted.into());
     }
 
-    let call_cost = caller.context().config.host_function_costs().call;
-    charge_host_function_call(
-        &mut caller,
-        &call_cost,
-        [
-            u64::from(address_ptr),
-            u64::from(address_len),
-            transferred_value,
-            u64::from(entry_point_ptr),
-            u64::from(entry_point_len),
-            u64::from(input_ptr),
-            u64::from(input_len),
-            u64::from(cb_alloc),
-            u64::from(cb_ctx),
-        ],
-    )?;
+    let call_cost = caller.context().config.host_ffi_opt_costs().call;
+    panic!("casper_call should not be used anymore");
 
     // 1. Look up address in the storage
     // 1a. if it's VM1 contract, wire up old EE, pretend you're 1.x. Input data would be
@@ -1350,11 +852,9 @@ pub fn casper_call<S: GlobalStateReader + 'static>(
 fn exec<S: GlobalStateReader + 'static>(
     mut caller: impl Caller<Context = Context<S>>,
     execute_request: ExecuteRequest,
-    cb_alloc: u32,
-    cb_ctx: u32,
-) -> VMResult<u32> {
+) -> VMResult<(Option<Bytes>, u32)> {
     let tracking_copy = caller.context().tracking_copy.fork2();
-
+    let mut ret_output = None;
     let (gas_usage, host_result) = match caller.executor().execute(tracking_copy, execute_request) {
         Ok(ExecuteResult {
             host_error,
@@ -1364,18 +864,8 @@ fn exec<S: GlobalStateReader + 'static>(
             cache,
             messages,
         }) => {
-            if let Some(output) = output {
-                let out_ptr: u32 = if cb_alloc != 0 {
-                    caller.alloc(cb_alloc, output.len(), cb_ctx)?
-                } else {
-                    // treats alloc_ctx as data
-                    cb_ctx
-                };
+            ret_output = output;
 
-                if out_ptr != 0 {
-                    caller.memory_write(out_ptr.wrapped_try_into()?, &output)?;
-                }
-            }
             let host_result = match host_error {
                 Some(host_error) => Err(host_error),
                 None => {
@@ -1406,7 +896,7 @@ fn exec<S: GlobalStateReader + 'static>(
         return Err(VMError::Execute(ExecuteError::Api(api_error)));
     }
 
-    Ok(u32_from_host_result(host_result))
+    Ok((ret_output, u32_from_host_result(host_result)))
 }
 
 pub fn casper_env_balance<S: GlobalStateReader>(
@@ -1416,17 +906,8 @@ pub fn casper_env_balance<S: GlobalStateReader>(
     entity_addr_len: u32,
     output_ptr: u32,
 ) -> VMResult<u32> {
-    let balance_cost = caller.context().config.host_function_costs().env_balance;
-    charge_host_function_call(
-        &mut caller,
-        &balance_cost,
-        [
-            u64::from(entity_kind),
-            u64::from(entity_addr_ptr),
-            u64::from(entity_addr_len),
-            u64::from(output_ptr),
-        ],
-    )?;
+    let balance_cost = caller.context().config.host_ffi_opt_costs().env_balance;
+    panic!("casper_env_balance should not be used anymore");
 
     let entity_key = match EntityKindTag::from_u32(entity_kind) {
         Some(EntityKindTag::Account) => {
@@ -1589,19 +1070,8 @@ pub fn casper_upgrade<S: GlobalStateReader + 'static>(
         return Err(FatalHostError::AttemptWriteInRestricted.into());
     }
 
-    let upgrade_cost = caller.context().config.host_function_costs().upgrade;
-    charge_host_function_call(
-        &mut caller,
-        &upgrade_cost,
-        [
-            u64::from(code_ptr),
-            u64::from(code_size),
-            u64::from(entry_point_ptr),
-            u64::from(entry_point_size),
-            u64::from(input_ptr),
-            u64::from(input_size),
-        ],
-    )?;
+    let upgrade_cost = caller.context().config.host_ffi_opt_costs().upgrade;
+    panic!("casper_upgrade should not be used anymore");
 
     let code = caller
         .memory_read(code_ptr.wrapped_try_into()?, code_size as usize)
@@ -2017,12 +1487,8 @@ pub fn casper_env_info<S: GlobalStateReader>(
     info_ptr: u32,
     info_size: u32,
 ) -> VMResult<u32> {
-    let block_time_cost = caller.context().config.host_function_costs().env_info;
-    charge_host_function_call(
-        &mut caller,
-        &block_time_cost,
-        [u64::from(info_ptr), u64::from(info_size)],
-    )?;
+    let block_time_cost = caller.context().config.host_ffi_opt_costs().env_info;
+    panic!("casper_env_info should not be used anymore");
 
     let (caller_kind, caller_addr) = match &caller.context().caller {
         Key::Account(account_hash) => (EntityKindTag::Account as u32, account_hash.value()),
@@ -2074,215 +1540,6 @@ pub fn casper_env_info<S: GlobalStateReader>(
     Ok(HOST_ERROR_SUCCESS)
 }
 
-pub fn casper_emit<S: GlobalStateReader>(
-    mut caller: impl Caller<Context = Context<S>>,
-    topic_name_ptr: u32,
-    topic_name_size: u32,
-    payload_ptr: u32,
-    payload_size: u32,
-) -> VMResult<u32> {
-    // In restricted mode, emitting messages is not allowed
-    if caller.context().sandboxed {
-        return Err(FatalHostError::AttemptWriteInRestricted.into());
-    }
-
-    // Charge for parameter weights.
-    let emit_host_function = caller.context().config.host_function_costs().emit;
-
-    charge_host_function_call(
-        &mut caller,
-        &emit_host_function,
-        [
-            u64::from(topic_name_ptr),
-            u64::from(topic_name_size),
-            u64::from(payload_ptr),
-            u64::from(payload_size),
-        ],
-    )?;
-
-    if topic_name_size > caller.context().message_limits.max_topic_name_size {
-        return Ok(HOST_ERROR_TOPIC_TOO_LONG);
-    }
-
-    if payload_size > caller.context().message_limits.max_message_size {
-        return Ok(HOST_ERROR_PAYLOAD_TOO_LONG);
-    }
-
-    let topic_name = {
-        let topic: Vec<u8> =
-            caller.memory_read(topic_name_ptr.wrapped_try_into()?, topic_name_size as usize)?;
-        let Ok(topic) = String::from_utf8(topic) else {
-            // Not a valid UTF-8 string
-            return Ok(HOST_ERROR_INVALID_DATA);
-        };
-        topic
-    };
-
-    let payload = caller.memory_read(payload_ptr.wrapped_try_into()?, payload_size as usize)?;
-
-    let entity_addr = context_to_entity_addr(caller.context());
-
-    let mut message_topics = caller
-        .context_mut()
-        .tracking_copy
-        .get_message_topics(entity_addr)
-        .unwrap_or_else(|error| {
-            panic!("Error while reading from storage; aborting error={error:?}")
-        });
-
-    if message_topics.len() >= caller.context().message_limits.max_topics_per_contract as usize {
-        return Ok(HOST_ERROR_TOO_MANY_TOPICS);
-    }
-
-    let topic_name_hash = Digest::hash(&topic_name).value().into();
-
-    match message_topics.add_topic(&topic_name, topic_name_hash) {
-        Ok(()) => {
-            // New topic is created
-        }
-        Err(MessageTopicError::DuplicateTopic) => {
-            // We're lazily creating message topics and this operation is idempotent.
-            // Therefore, already existing topic is not an issue.
-        }
-        Err(MessageTopicError::MaxTopicsExceeded) => {
-            // We're validating the size of topics before adding them
-            return Ok(HOST_ERROR_TOO_MANY_TOPICS);
-        }
-        Err(MessageTopicError::TopicNameSizeExceeded) => {
-            // We're validating the length of topic before adding it
-            return Ok(HOST_ERROR_TOPIC_TOO_LONG);
-        }
-        Err(error) => {
-            // These error variants are non_exhaustive, and we should handle them explicitly.
-            unreachable!("Unexpected error while adding a topic: {:?}", error);
-        }
-    };
-
-    let current_block_time = caller.context().block_time;
-    eprintln!("📩 {topic_name}: {payload:?} (at {current_block_time:?})");
-
-    let topic_key = Key::Message(MessageAddr::new_topic_addr(entity_addr, topic_name_hash));
-    let prev_topic_summary = match caller.context_mut().tracking_copy.read(&topic_key) {
-        Ok(Some(StoredValue::MessageTopic(message_topic_summary))) => message_topic_summary,
-        Ok(Some(stored_value)) => {
-            panic!("Unexpected stored value: {stored_value:?}");
-        }
-        Ok(None) => {
-            let message_topic_summary =
-                MessageTopicSummary::new(0, current_block_time, topic_name.clone());
-            let summary = StoredValue::MessageTopic(message_topic_summary.clone());
-            caller.context_mut().tracking_copy.write(topic_key, summary);
-            message_topic_summary
-        }
-        Err(error) => panic!("Error while reading from storage; aborting error={error:?}"),
-    };
-
-    let topic_message_index = if prev_topic_summary.blocktime() != current_block_time {
-        for index in 1..prev_topic_summary.message_count() {
-            let message_key = Key::message(entity_addr, topic_name_hash, index);
-            debug_assert!(
-                {
-                    // NOTE: This assertion is to ensure that the message index is continuous, and
-                    // the previous messages are pruned properly.
-                    caller
-                        .context_mut()
-                        .tracking_copy
-                        .read(&message_key)
-                        .map_err(|_| VMError::Fatal(FatalHostError::TrackingCopy))?
-                        .is_some()
-                },
-                "Message index is not continuous"
-            );
-
-            // Prune the previous messages
-            caller.context_mut().tracking_copy.prune(message_key);
-        }
-        0
-    } else {
-        prev_topic_summary.message_count()
-    };
-
-    // Data stored in the global state associated with the message block.
-    type MessageCountPair = (BlockTime, u64);
-
-    let block_message_index: u64 = match caller
-        .context_mut()
-        .tracking_copy
-        .read(&Key::BlockGlobal(BlockGlobalAddr::MessageCount))
-    {
-        Ok(Some(StoredValue::CLValue(value_pair))) => {
-            let (prev_block_time, prev_count): MessageCountPair =
-                CLValue::into_t(value_pair).map_err(|_| FatalHostError::TypeConversion)?;
-            if prev_block_time == current_block_time {
-                prev_count
-            } else {
-                0
-            }
-        }
-        Ok(Some(other)) => panic!("Unexpected stored value: {other:?}"),
-        Ok(None) => {
-            // No messages in current block yet
-            0
-        }
-        Err(error) => {
-            panic!("Error while reading from storage; aborting error={error:?}")
-        }
-    };
-
-    let Some(topic_message_count) = topic_message_index.checked_add(1) else {
-        return Ok(HOST_ERROR_MESSAGE_TOPIC_FULL);
-    };
-
-    let Some(block_message_count) = block_message_index.checked_add(1) else {
-        return Ok(HOST_ERROR_MAX_MESSAGES_PER_BLOCK_EXCEEDED);
-    };
-
-    // Under v2 runtime messages are only limited to bytes.
-    let message_payload = MessagePayload::Bytes(payload.into());
-
-    let message = Message::new(
-        entity_addr,
-        message_payload,
-        topic_name,
-        topic_name_hash,
-        topic_message_index,
-        block_message_index,
-    );
-    let topic_value = StoredValue::MessageTopic(MessageTopicSummary::new(
-        topic_message_count,
-        current_block_time,
-        message.topic_name().to_owned(),
-    ));
-
-    let message_key = message.message_key();
-    let message_value = StoredValue::Message(
-        message
-            .checksum()
-            .map_err(|_| FatalHostError::MessageChecksumMissing)?,
-    );
-    let message_count_pair: MessageCountPair = (current_block_time, block_message_count);
-    let block_message_count_value = StoredValue::CLValue(
-        CLValue::from_t(message_count_pair).map_err(|_| FatalHostError::TypeConversion)?,
-    );
-
-    // Charge for amount as measured by serialized length
-    let bytes_count = topic_value.serialized_length()
-        + message_value.serialized_length()
-        + block_message_count_value.serialized_length();
-    charge_gas_storage(&mut caller, bytes_count)?;
-
-    caller.context_mut().tracking_copy.emit_message(
-        topic_key,
-        topic_value,
-        message_key,
-        message_value,
-        block_message_count_value,
-        message,
-    );
-
-    Ok(HOST_ERROR_SUCCESS)
-}
-
 /// Computes digest hash, using provided algorithm type.
 ///
 /// # Arguments
@@ -2303,18 +1560,9 @@ pub fn casper_generic_hash<S: GlobalStateReader>(
     let in_bytes: Vec<u8> = caller.memory_read(in_ptr.wrapped_try_into()?, in_size as usize)?;
 
     // Charge for parameter weights.
-    let generic_hash_cost = caller.context().config.host_function_costs().generic_hash;
+    let generic_hash_cost = caller.context().config.host_ffi_opt_costs().generic_hash;
 
-    charge_host_function_call(
-        &mut caller,
-        &generic_hash_cost,
-        [
-            u64::from(in_ptr),
-            u64::from(in_size),
-            u64::from(out_ptr),
-            u64::from(hash_algorithm),
-        ],
-    )?;
+    panic!("casper_generic_hash should not be used anymore");
 
     let hash_algorithm =
         HashAlgorithm::from_u32(hash_algorithm).ok_or(FatalHostError::TypeConversion)?;
@@ -2386,21 +1634,10 @@ pub fn casper_recover_secp256k1<S: GlobalStateReader>(
     let recover_secp256k1_cost = caller
         .context()
         .config
-        .host_function_costs()
+        .host_ffi_opt_costs()
         .recover_secp256k1;
 
-    charge_host_function_call(
-        &mut caller,
-        &recover_secp256k1_cost,
-        [
-            u64::from(message_ptr),
-            u64::from(message_size),
-            u64::from(signature_ptr),
-            u64::from(signature_size),
-            u64::from(public_key_ptr),
-            u64::from(recovery_id),
-        ],
-    )?;
+    panic!("casper_recover_secp256k1 should not be used anymore");
 
     if recovery_id >= 4 {
         return Ok(HOST_ERROR_INVALID_INPUT);

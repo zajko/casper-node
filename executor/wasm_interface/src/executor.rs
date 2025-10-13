@@ -435,7 +435,14 @@ pub enum IOMethods {
     CopyInput,
 }
 
-/// Available options for interacting with the system.
+/// Specific subsection of FFIMenu actions that will be executed as system contract calls
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SystemContractCall {
+    Mint(MintMethods),
+    Auction(AuctionMethods),
+}
+
+/// Available options for interacting with the host ffi.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FFIMenu {
     Mint(MintMethods),
@@ -445,6 +452,54 @@ pub enum FFIMenu {
     GlobalState(GlobalStateMethods),
     Control(ControlMethods),
     IO(IOMethods),
+}
+
+impl FFIMenu {
+    pub fn allowed_in_sandbox(&self) -> bool {
+        match self {
+            FFIMenu::Mint(mint_methods) => match mint_methods {
+                MintMethods::Burn => false,
+                MintMethods::Transfer => false,
+                MintMethods::TransferPurse => false,
+            },
+            FFIMenu::Auction(auction_methods) => match auction_methods {
+                AuctionMethods::Activate => false,
+                AuctionMethods::Bid => false,
+                AuctionMethods::Withdraw => false,
+                AuctionMethods::Delegate => false,
+                AuctionMethods::Undelegate => false,
+                AuctionMethods::Redelegate => false,
+                AuctionMethods::AddReservation => false,
+                AuctionMethods::CancelReservation => false,
+                AuctionMethods::ChangePublicKey => false,
+            },
+            FFIMenu::Crypto(crypto_methods) => match crypto_methods {
+                CryptoMethods::AltBn128Add => true,
+                CryptoMethods::AltBn128Multiply => true,
+                CryptoMethods::AltBn128Pairing => true,
+            },
+            FFIMenu::Emit(emit_methods) => match emit_methods {
+                EmitMethods::PrintStd => true,
+                EmitMethods::Native => false,
+            },
+            FFIMenu::GlobalState(global_state_methods) => match global_state_methods {
+                GlobalStateMethods::Read => true,
+                GlobalStateMethods::Write => false,
+                GlobalStateMethods::Remove => false,
+                GlobalStateMethods::GetBalance => true,
+                GlobalStateMethods::GetInfo => true,
+            },
+            FFIMenu::Control(control_methods) => match control_methods {
+                ControlMethods::Create => false,
+                ControlMethods::Call => false,
+                ControlMethods::Upgrade => false,
+            },
+            FFIMenu::IO(iomethods) => match iomethods {
+                IOMethods::Return => true,
+                IOMethods::CopyInput => true,
+            },
+        }
+    }
 }
 
 impl TryFrom<u32> for FFIMenu {
@@ -545,12 +600,12 @@ pub enum ExecutionKind {
         entry_point: String,
     },
     /// Interact with the system.
-    System(FFIMenu),
+    System(SystemContractCall),
 }
 
 impl ExecutionKind {
     /// Returns system menu selection if relevant.
-    pub fn system_menu_selection(&self) -> Option<FFIMenu> {
+    pub fn ffi_selection(&self) -> Option<SystemContractCall> {
         match self {
             ExecutionKind::SessionBytes(_) | ExecutionKind::Stored { .. } => None,
             ExecutionKind::System(menu) => Some(menu.clone()),
@@ -594,6 +649,10 @@ pub enum ExecuteError {
     MainPurseNotFound(Key),
     #[error("unable to convert key into uref {0}")]
     InvalidKeyForPurse(Key),
+    #[error("attempt to call a non-existent ffi option {0}")]
+    InvalidFFIOption(u32),
+    #[error("attempted writing in restricted mode")]
+    AttemptWriteInRestricted,
 }
 
 #[derive(Debug, Error)]

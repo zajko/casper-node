@@ -128,7 +128,7 @@ fn test_alt_bn128_add() {
     );
     let expected = Ok((Fq::from(ADD_EXPECTED_X_LE), Fq::from(ADD_EXPECTED_Y_LE)));
     if actual != expected {
-        casper::print(&format!("left {:?} right {:?}", actual, expected));
+        let _ = casper::print(&format!("left {:?} right {:?}", actual, expected));
         let error_code = line!().to_le_bytes();
         casper::ret(ReturnFlags::ROLLBACK, Some(&error_code));
     }

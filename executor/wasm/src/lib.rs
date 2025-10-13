@@ -529,7 +529,7 @@ impl ExecutorV2 {
         }
     }
 
-    fn execute_system_contract<R: GlobalStateReader + 'static>(
+    fn execute_ffi<R: GlobalStateReader + 'static>(
         &self,
         menu_selection: FFIMenu,
         tracking_copy: TrackingCopy<R>,
@@ -546,11 +546,6 @@ impl ExecutorV2 {
             runtime_native_config,
             ..
         } = execute_request;
-
-        if sandboxed {
-            info!("attempt to call system contract while sandboxed");
-            return Err(ExecuteError::SandboxedSystemContractCall);
-        }
 
         let gas_usage = GasUsage::new(gas_limit, gas_limit);
 
@@ -572,13 +567,8 @@ impl ExecutorV2 {
         mut tracking_copy: TrackingCopy<R>,
         execute_request: ExecuteRequest,
     ) -> Result<ExecuteResult, ExecuteError> {
-        if let Some(system_menu_selection) = execute_request.execution_kind.system_menu_selection()
-        {
-            return self.execute_system_contract(
-                system_menu_selection,
-                tracking_copy,
-                execute_request,
-            );
+        if let Some(ffi_menu_selection) = execute_request.execution_kind.ffi_selection() {
+            return self.execute_ffi(ffi_menu_selection, tracking_copy, execute_request);
         }
 
         let ExecuteRequest {

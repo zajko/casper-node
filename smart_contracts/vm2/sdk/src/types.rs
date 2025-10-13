@@ -349,7 +349,7 @@ impl TryFrom<u32> for GlobalStateFunctionOption {
             Ok(GlobalStateFunctionOption::Remove)
         } else if value == 403 {
             Ok(GlobalStateFunctionOption::GetBalance)
-        } else if value == 403 {
+        } else if value == 404 {
             Ok(GlobalStateFunctionOption::GetInfo)
         } else {
             Err(())

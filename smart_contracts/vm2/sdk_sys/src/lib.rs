@@ -1,16 +1,5 @@
 pub mod for_each_host_function;
 
-extern "C" {
-    pub fn casper_ffi(
-        function_opt: u32,
-        input_ptr: *const u8,
-        input_size: usize,
-        alloc: extern "C" fn(usize, *mut core::ffi::c_void) -> *mut u8, /* For capturing output
-                                                                         * data */
-        alloc_ctx: *const core::ffi::c_void,
-    ) -> u32;
-}
-
 #[derive(Debug)]
 #[repr(C)]
 pub struct EnvInfo {
@@ -51,8 +40,6 @@ pub struct UpgradeResult {
     pub contract_address: [u8; 32],
     pub version: u32,
 }
-
-extern "C" {
 
 macro_rules! visit_host_function {
     ( $( $(#[$cfg:meta])? $vis:vis fn $name:ident $(( $($arg:ident: $argty:ty $(,)?)* ))? $(-> $ret:ty)?;)+) => {

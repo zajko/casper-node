@@ -135,7 +135,7 @@ impl MinimalHostWrapper {
     }
 
     pub fn print(&self) {
-        casper::print("");
+        let _ = casper::print("");
     }
 
     pub fn read(&self) {

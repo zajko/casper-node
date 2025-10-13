@@ -4,7 +4,7 @@ use core::array::TryFromSliceError;
 use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::{
-    casper::casper_system,
+    casper::casper_ffi,
     types::{CryptoFunctionOption, U256},
 };
 

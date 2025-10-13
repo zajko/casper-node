@@ -75,5 +75,5 @@ pub fn emit_message(topic_name: &str, message: &[u8]) -> Result<(), HostResult> 
 
 #[inline]
 pub fn print(text: &str) {
-    casper::print(text);
+    let _ = casper::print(text);
 }

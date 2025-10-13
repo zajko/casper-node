@@ -6,7 +6,6 @@ pub mod native;
 use crate::abi::{CasperABI, EnumVariant};
 
 use crate::{
-    Message, ToCallData,
     compat::types::{CLType, CLTyped},
     log,
     prelude::{
@@ -19,12 +18,13 @@ use crate::{
     reserve_vec_space,
     serializers::borsh::{BorshDeserialize, BorshSerialize},
     types::{Address, CallError, EmitFunctionOption, HashAlgorithm, PublicKey},
+    Message, ToCallData,
 };
 
 use crate::types::{EntityAddr, SystemContractOption};
-use casper_contract_sdk_sys::EnvInfo;
+use casper_contract_sdk_sys::{casper_env_info, EnvInfo};
 use casper_executor_wasm_common::{
-    error::{HOST_ERROR_SUCCESS, HostResult, result_from_code},
+    error::{result_from_code, HostResult, HOST_ERROR_SUCCESS},
     flags::ReturnFlags,
     keyspace::{Keyspace, KeyspaceTag},
 };
@@ -287,7 +287,7 @@ fn call_result_from_code(result_code: u32) -> Result<(), CallError> {
 /// Call a host function.
 pub fn casper_ffi(ffi_opt: u32, input_data: &[u8]) -> (Option<Vec<u8>>, Result<(), CallError>) {
     let mut output = None;
-    let result_code = call_into_system(
+    let result_code = call_ffi(
         ffi_opt,
         input_data,
         Some(|size| {
