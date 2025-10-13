@@ -1,45 +1,44 @@
-use std::borrow::Cow;
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
 
 use bytes::Bytes;
-use casper_executor_wasm_common::chain_utils::{self, compute_next_contract_hash_version};
-use casper_executor_wasm_common::entry_point::{
-    ENTRY_POINT_PAYMENT_CALLER, ENTRY_POINT_PAYMENT_DIRECT_INVOCATION_ONLY,
-    ENTRY_POINT_PAYMENT_SELF_ONWARD,
+use casper_executor_wasm_common::{
+    chain_utils::{self, compute_next_contract_hash_version},
+    entry_point::{
+        ENTRY_POINT_PAYMENT_CALLER, ENTRY_POINT_PAYMENT_DIRECT_INVOCATION_ONLY,
+        ENTRY_POINT_PAYMENT_SELF_ONWARD,
+    },
+    error::{
+        CALLEE_SUCCEEDED, CALLEE_TRAPPED, HOST_ERROR_CL_VALUE, HOST_ERROR_INVALID_DATA,
+        HOST_ERROR_INVALID_INPUT, HOST_ERROR_NOT_FOUND, HOST_ERROR_SUCCESS,
+    },
+    keyspace::{Keyspace, KeyspaceTag},
 };
-use casper_executor_wasm_common::error::{
-    CALLEE_SUCCEEDED, CALLEE_TRAPPED, HOST_ERROR_CL_VALUE, HOST_ERROR_INVALID_DATA,
-    HOST_ERROR_INVALID_INPUT, HOST_ERROR_NOT_FOUND, HOST_ERROR_SUCCESS,
+use casper_executor_wasm_interface::{
+    executor::{ExecuteRequestBuilder, ExecuteResult, ExecutionKind, Executor},
+    Caller, FatalHostError, VMError, VMResult,
 };
-use casper_executor_wasm_common::keyspace::{Keyspace, KeyspaceTag};
-use casper_executor_wasm_interface::executor::{
-    ExecuteRequestBuilder, ExecuteResult, ExecutionKind, Executor,
-};
-use casper_executor_wasm_interface::{Caller, FatalHostError, VMError, VMResult};
 use casper_storage::{global_state::GlobalStateReader, tracking_copy::TrackingCopyExt};
-use casper_types::account::AccountHash;
-use casper_types::addressable_entity::{
-    ActionThresholds, AssociatedKeys, NamedKeyAddr, NamedKeyValue,
-};
-use casper_types::contracts::{ContractHash, ContractPackage, ContractPackageHash, EntryPoints};
 use casper_types::{
-    bytesrepr, AccessRights, AddressableEntity, BlockHash, ByteCode, ByteCodeAddr, ByteCodeHash,
-    ByteCodeKind, CLType, Contract, ContractRuntimeTag, ContractWasmHash, EntityKind,
-    EntryPointPayment, EntryPointValue, HashAddr, NamedKeys, Package, PackageHash, ProtocolVersion,
-    URef,
+    account::AccountHash,
+    addressable_entity::{ActionThresholds, AssociatedKeys, NamedKeyAddr, NamedKeyValue},
+    bytesrepr,
+    bytesrepr::ToBytes,
+    contracts::{ContractHash, ContractPackage, ContractPackageHash, EntryPoints},
+    AccessRights, AddressableEntity, BlockHash, ByteCode, ByteCodeAddr, ByteCodeHash, ByteCodeKind,
+    CLType, CLValue, Contract, ContractRuntimeTag, ContractWasmHash, Digest, EntityAddr,
+    EntityKind, EntryPointPayment, EntryPointValue, HashAddr, Key, NamedKeys, Package, PackageHash,
+    ProtocolVersion, StoredValue, URef,
 };
-use casper_types::{bytesrepr::ToBytes, CLValue, Digest, EntityAddr, Key, StoredValue};
 use either::Either;
 use num_traits::FromPrimitive;
 use tracing::{debug, error, warn};
 
-use crate::abi::{CreateResult, EnvInfo};
-use crate::context::Context;
-use crate::host::{
-    context_to_entity_addr, metered_write, EntityKindTag, NAME_FOR_V2_CONTRACT_MAIN_PURSE,
+use crate::{
+    abi::{CreateResult, EnvInfo},
+    context::Context,
+    host::{context_to_entity_addr, metered_write, EntityKindTag, NAME_FOR_V2_CONTRACT_MAIN_PURSE},
+    system,
 };
-use crate::system;
 
 /// Read value under from global state under a key.
 pub(crate) fn host_read<S: GlobalStateReader + 'static>(

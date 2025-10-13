@@ -31,24 +31,24 @@ pub struct HostFFIFunctionCost {
     /// How much the user is charged for calling the host function.
     base_cost: Cost,
     /// How much the user is charged for each byte of the input data.
-    per_input_byte: Cost,
+    per_byte: Cost,
 }
 
 impl Default for HostFFIFunctionCost {
     fn default() -> Self {
         Self {
             base_cost: DEFAULT_FIXED_COST,
-            per_input_byte: DEFAULT_PER_BYTES_COST,
+            per_byte: DEFAULT_PER_BYTES_COST,
         }
     }
 }
 
 impl HostFFIFunctionCost {
     /// Creates a new instance of `HostFFIFunctionCost`.
-    pub const fn new(base_cost: Cost, per_input_byte: Cost) -> Self {
+    pub const fn new(base_cost: Cost, per_byte: Cost) -> Self {
         Self {
             base_cost,
-            per_input_byte,
+            per_byte,
         }
     }
 
@@ -63,14 +63,14 @@ impl HostFFIFunctionCost {
     pub fn zero() -> Self {
         Self {
             base_cost: Default::default(),
-            per_input_byte: Default::default(),
+            per_byte: Default::default(),
         }
     }
 
     pub fn with_new_base_cost(self, base_cost: Cost) -> Self {
         Self {
             base_cost,
-            per_input_byte: self.per_input_byte,
+            per_byte: self.per_byte,
         }
     }
 
@@ -82,7 +82,7 @@ impl HostFFIFunctionCost {
     /// Calculate gas cost for a host function
     pub fn calculate_gas_cost(&self, number_of_bytes: u64) -> Option<Gas> {
         let mut gas = Gas::new(self.base_cost);
-        let lhs = Gas::new(self.per_input_byte);
+        let lhs = Gas::new(self.per_byte);
         let rhs = Gas::new(number_of_bytes);
         let product = lhs.checked_mul(rhs)?;
         gas = gas.checked_add(product)?;
@@ -94,8 +94,8 @@ impl HostFFIFunctionCost {
 impl Distribution<HostFFIFunctionCost> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> HostFFIFunctionCost {
         let cost = rng.gen::<u32>() as u64;
-        let per_input_byte = rng.gen::<u32>() as u64;
-        HostFFIFunctionCost::new(cost, per_input_byte)
+        let per_byte = rng.gen::<u32>() as u64;
+        HostFFIFunctionCost::new(cost, per_byte)
     }
 }
 
@@ -103,24 +103,24 @@ impl ToBytes for HostFFIFunctionCost {
     fn to_bytes(&self) -> Result<Vec<u8>, bytesrepr::Error> {
         let mut ret = bytesrepr::unchecked_allocate_buffer(self);
         ret.append(&mut self.base_cost.to_bytes()?);
-        ret.append(&mut self.per_input_byte.to_bytes()?);
+        ret.append(&mut self.per_byte.to_bytes()?);
         Ok(ret)
     }
 
     fn serialized_length(&self) -> usize {
-        self.base_cost.serialized_length() + self.per_input_byte.serialized_length()
+        self.base_cost.serialized_length() + self.per_byte.serialized_length()
     }
 }
 
 impl FromBytes for HostFFIFunctionCost {
     fn from_bytes(bytes: &[u8]) -> Result<(Self, &[u8]), bytesrepr::Error> {
         let (base_cost, bytes) = FromBytes::from_bytes(bytes)?;
-        let (per_input_byte, bytes) = FromBytes::from_bytes(bytes)?;
+        let (per_byte, bytes) = FromBytes::from_bytes(bytes)?;
 
         Ok((
             Self {
                 base_cost,
-                per_input_byte,
+                per_byte,
             },
             bytes,
         ))

@@ -21,8 +21,8 @@ use casper_storage::{
 };
 use casper_types::{
     account::AccountHash, AuctionCosts, BlockHash, Chainspec, ChainspecRegistry, Digest,
-    FeeHandling, GenesisAccount, GenesisConfig, GenesisValidator, HostFFIFunctionCosts,
-    HostFFIFunctionCost, Key, MessageLimits, MintCosts, Motes, Phase, ProtocolVersion, PublicKey,
+    FeeHandling, GenesisAccount, GenesisConfig, GenesisValidator, HostFFIFunctionCost,
+    HostFFIFunctionCosts, Key, MessageLimits, MintCosts, Motes, Phase, ProtocolVersion, PublicKey,
     SecretKey, StorageCosts, SystemConfig, Timestamp, TransactionHash, TransactionV1Hash,
     WasmConfig, WasmV2Config, DEFAULT_BASELINE_MOTES_AMOUNT, DEFAULT_WASM_MAX_MEMORY, U512,
 };

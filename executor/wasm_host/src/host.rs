@@ -1,27 +1,13 @@
-pub(crate) mod altbn128;
 pub(crate) mod control;
 pub(crate) mod crypto;
 pub(crate) mod emit;
 pub(crate) mod global_state;
 pub(crate) mod io;
-use std::{borrow::Cow, collections::BTreeMap, num::NonZeroU32, sync::Arc};
+use std::sync::Arc;
 
 use bytes::Bytes;
-use casper_executor_wasm_common::{
-    chain_utils,
-    entry_point::{
-        ENTRY_POINT_PAYMENT_CALLER, ENTRY_POINT_PAYMENT_DIRECT_INVOCATION_ONLY,
-        ENTRY_POINT_PAYMENT_SELF_ONWARD,
-    },
-    error::{
-        CallError, CALLEE_NOT_CALLABLE, CALLEE_SUCCEEDED, CALLEE_TRAPPED, HOST_ERROR_INVALID_DATA,
-        HOST_ERROR_INVALID_INPUT, HOST_ERROR_MAX_MESSAGES_PER_BLOCK_EXCEEDED,
-        HOST_ERROR_MESSAGE_TOPIC_FULL, HOST_ERROR_NOT_FOUND, HOST_ERROR_PAYLOAD_TOO_LONG,
-        HOST_ERROR_SUCCESS, HOST_ERROR_TOO_MANY_TOPICS, HOST_ERROR_TOPIC_TOO_LONG,
-    },
-    flags::ReturnFlags,
-    keyspace::{Keyspace, KeyspaceTag},
-};
+use casper_executor_wasm_common::error::CallError;
+
 use casper_executor_wasm_interface::{
     executor::{
         ControlMethods, CryptoMethods, EmitMethods, ExecuteError, ExecuteRequestBuilder,
@@ -29,51 +15,29 @@ use casper_executor_wasm_interface::{
     },
     u32_from_host_result, Caller, FatalHostError, VMError, VMResult,
 };
-use casper_storage::{global_state::GlobalStateReader, tracking_copy::TrackingCopyExt};
+use casper_storage::global_state::GlobalStateReader;
 use casper_types::{
-    account::AccountHash,
-    addressable_entity::{
-        ActionThresholds, AssociatedKeys, MessageTopicError, NamedKeyAddr, NamedKeyValue,
-    },
-    bytesrepr::{FromBytes, ToBytes},
-    contract_messages::{Message, MessageAddr, MessagePayload, MessageTopicSummary},
-    execution::RetValue,
-    AccessRights, AddressableEntity, BlockGlobalAddr, BlockHash, BlockTime, ByteCode, ByteCodeAddr,
-    ByteCodeHash, ByteCodeKind, CLType, CLValue, Contract, ContractRuntimeTag, ContractWasmHash,
-    Digest, EntityAddr, EntityKind, EntryPointPayment, EntryPointValue, HashAddr, HashAlgorithm,
-    HostFFIFunctionCost, Key, NamedKeys, Package, PackageAddr, ProtocolVersion, Signature,
-    StoredValue, URef,
+    bytesrepr::ToBytes, BlockHash, Digest, EntityAddr, HostFFIFunctionCost, Key, StoredValue,
 };
-use either::Either;
 use num_derive::FromPrimitive;
-use num_traits::FromPrimitive;
-use tracing::{debug, error, info, warn};
+use tracing::error;
 
 use crate::{
-    abi::{CreateResult, EnvInfo},
     context::Context,
     host::{
         control::{host_call, host_upgrade},
+        crypto::{
+            host_alt_bn128_add, host_alt_bn128_mul, host_alt_bn128_pairing, host_generic_hash,
+            host_recover_secp256k1,
+        },
         emit::{emit, print_std},
         global_state::{
             host_create, host_env_balance, host_env_info, host_read, host_remove, host_write,
         },
         io::{host_copy_input, host_ret},
     },
-    system,
-};
-use blake2::{
-    digest::{Update, VariableOutput},
-    Blake2bVar,
-};
-use casper_executor_wasm_common::{
-    chain_utils::{compute_next_contract_hash_version, compute_wasm_bytecode_hash},
-    error::{HOST_ERROR_CL_VALUE, HOST_LOCKED_PACKAGE, HOST_NO_ACTIVE_CONTRACT},
 };
 use casper_executor_wasm_interface::executor::{ExecuteRequest, FFIMenu};
-use casper_types::contracts::{ContractHash, ContractPackage, ContractPackageHash, EntryPoints};
-use keccak_asm::Digest as KeccakDigest;
-use sha2::Sha256;
 
 const NAME_FOR_V2_CONTRACT_MAIN_PURSE: &str = "__main_purse";
 
@@ -162,68 +126,7 @@ fn context_to_entity_addr<S: GlobalStateReader>(context: &Context<S>) -> EntityA
     }
 }
 
-pub fn casper_copy_input<S: GlobalStateReader>(
-    mut caller: impl Caller<Context = Context<S>>,
-    cb_alloc: u32,
-    alloc_ctx: u32,
-) -> VMResult<u32> {
-    let input = caller.context().input.clone();
-
-    let out_ptr: u32 = if cb_alloc != 0 {
-        caller.alloc(cb_alloc, input.len(), alloc_ctx)?
-    } else {
-        // treats alloc_ctx as data
-        alloc_ctx
-    };
-
-    let copy_input_cost = caller.context().config.host_ffi_opt_costs().copy_input;
-    panic!("casper_copy_input should not be used anymore");
-
-    if out_ptr == 0 {
-        Ok(out_ptr)
-    } else {
-        caller.memory_write(out_ptr.wrapped_try_into()?, &input)?;
-        Ok(out_ptr + (input.len() as u32))
-    }
-}
-
 /// Returns from the execution of a smart contract with an optional flags.
-pub fn casper_return<S: GlobalStateReader>(
-    mut caller: impl Caller<Context = Context<S>>,
-    flags: u32,
-    data_ptr: u32,
-    data_len: u32,
-) -> VMResult<()> {
-    let ret_cost = caller.context().config.host_ffi_opt_costs().ret;
-    panic!("casper_return should not be used anymore");
-
-    let maybe_flags = ReturnFlags::from_bits(flags);
-    let flags = match maybe_flags {
-        Some(flags) => flags,
-        None => {
-            return Err(VMError::Execute(ExecuteError::ReturnFlagsNotSupported(
-                flags,
-            )))
-        }
-    };
-    let data = if data_ptr == 0 {
-        None
-    } else {
-        let data = caller
-            .memory_read(data_ptr.wrapped_try_into()?, data_len.wrapped_try_into()?)
-            .map(Bytes::from)?;
-
-        let key = caller.context().callee;
-        let bytes = casper_types::bytesrepr::Bytes::from(data.to_vec());
-        caller
-            .context_mut()
-            .tracking_copy
-            .ret(key, RetValue::Bytes(bytes));
-
-        Some(data)
-    };
-    Err(VMError::Return { flags, data })
-}
 
 pub fn casper_ffi<S: GlobalStateReader + 'static>(
     mut caller: impl Caller<Context = Context<S>>,
@@ -274,7 +177,7 @@ pub fn casper_ffi<S: GlobalStateReader + 'static>(
                 .try_into_remaining()
                 .map_err(|_| FatalHostError::TypeConversion)?;
 
-            handle_as_contract_call(caller, system_contract_call_opt, input_data, gas_limit)
+            handle_as_contract_call(&mut caller, system_contract_call_opt, input_data, gas_limit)
         }
         FFIMenu::Auction(auction_method) => {
             let system_contract_call_opt = SystemContractCall::Auction(auction_method);
@@ -284,9 +187,15 @@ pub fn casper_ffi<S: GlobalStateReader + 'static>(
                 .try_into_remaining()
                 .map_err(|_| FatalHostError::TypeConversion)?;
 
-            handle_as_contract_call(caller, system_contract_call_opt, input_data, gas_limit)
+            handle_as_contract_call(&mut caller, system_contract_call_opt, input_data, gas_limit)
         }
-        FFIMenu::Crypto(crypto_methods) => todo!(),
+        FFIMenu::Crypto(crypto_methods) => match crypto_methods {
+            CryptoMethods::AltBn128Add => host_alt_bn128_add(input_data),
+            CryptoMethods::AltBn128Multiply => host_alt_bn128_mul(input_data),
+            CryptoMethods::AltBn128Pairing => host_alt_bn128_pairing(input_data),
+            CryptoMethods::GenericHash => host_generic_hash(input_data),
+            CryptoMethods::RecoverSecp256K1 => host_recover_secp256k1(input_data),
+        },
         FFIMenu::Emit(emit_methods) => match emit_methods {
             EmitMethods::PrintStd => print_std(input_data).map(|code| (None, code)),
             EmitMethods::Native => emit(&mut caller, input_data).map(|code| (None, code)),
@@ -330,7 +239,7 @@ pub fn casper_ffi<S: GlobalStateReader + 'static>(
 }
 
 fn handle_as_contract_call<S: GlobalStateReader + 'static>(
-    caller: impl Caller<Context = Context<S>>,
+    caller: &mut impl Caller<Context = Context<S>>,
     system_call_option: SystemContractCall,
     input_data: Bytes,
     gas_limit: u64,
@@ -354,98 +263,6 @@ fn handle_as_contract_call<S: GlobalStateReader + 'static>(
         .map_err(FatalHostError::ExecuteRequestBuildFailure)?;
 
     exec(caller, execute_request)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn casper_call<S: GlobalStateReader + 'static>(
-    mut caller: impl Caller<Context = Context<S>>,
-    address_ptr: u32,
-    address_len: u32,
-    transferred_value: u64,
-    entry_point_ptr: u32,
-    entry_point_len: u32,
-    input_ptr: u32,
-    input_len: u32,
-    cb_alloc: u32,
-    cb_ctx: u32,
-) -> VMResult<u32> {
-    // In restricted mode, contract calls are not allowed
-    if caller.context().sandboxed {
-        return Err(FatalHostError::AttemptWriteInRestricted.into());
-    }
-
-    let call_cost = caller.context().config.host_ffi_opt_costs().call;
-    panic!("casper_call should not be used anymore");
-
-    // 1. Look up address in the storage
-    // 1a. if it's VM1 contract, wire up old EE, pretend you're 1.x. Input data would be
-    // "RuntimeArgs". Serialized output of the call has to be passed as output. Value is ignored as
-    // you can't pass value (tokens) to called contracts. 1b. if it's new contract, wire up
-    // another VM as according to the bytecode format. 2. Depends on the VM used (old or new) at
-    // this point either entry point is validated (i.e. EE returned error) or will be validated as
-    // for now. 3. If entry point is valid, call it, transfer the value, pass the input data. If
-    // it's invalid, return error. 4. Output data is captured by calling `cb_alloc`.
-    // let vm = VM::new();
-    // vm.
-    let address = caller.memory_read(address_ptr.wrapped_try_into()?, address_len as _)?;
-    let smart_contract_addr: HashAddr = address.wrapped_try_into()?;
-
-    let input_data: Bytes = caller
-        .memory_read(input_ptr.wrapped_try_into()?, input_len as _)?
-        .into();
-
-    let entry_point = {
-        let entry_point_bytes =
-            caller.memory_read(entry_point_ptr.wrapped_try_into()?, entry_point_len as _)?;
-        match String::from_utf8(entry_point_bytes) {
-            Ok(entry_point) => entry_point,
-            Err(utf8_error) => {
-                error!(%utf8_error, "entry point name is not a valid utf-8 string; unable to call");
-                return Ok(CALLEE_NOT_CALLABLE);
-            }
-        }
-    };
-
-    // Limit the new VM to remaining gas.
-    let gas_limit = caller
-        .get_remaining_points()?
-        .try_into_remaining()
-        .map_err(|_| FatalHostError::TypeConversion)?;
-
-    let execute_request = ExecuteRequestBuilder::default()
-        .with_initiator(caller.context().initiator)
-        .with_caller_key(caller.context().callee)
-        .with_gas_limit(gas_limit)
-        .with_execution_kind(ExecutionKind::Stored {
-            address: smart_contract_addr,
-            entry_point: entry_point.clone(),
-        })
-        .with_transferred_value(transferred_value)
-        .with_input(input_data)
-        .with_transaction_hash(caller.context().transaction_hash)
-        // We're using shared address generator there as we need to preserve and advance the state
-        // of deterministic address generator across chain of calls.
-        .with_shared_address_generator(Arc::clone(&caller.context().address_generator))
-        .with_chain_name(caller.context().chain_name.clone())
-        .with_block_time(caller.context().block_time)
-        .with_state_hash(Digest::from_raw([0; 32]))
-        .with_block_height(1)
-        .with_parent_block_hash(BlockHash::new(Digest::from_raw([0; 32])))
-        .with_runtime_native_config(caller.context().runtime_native_config.clone())
-        .with_authorization_keys(caller.context().authorization_keys.clone())
-        .build()
-        .map_err(FatalHostError::ExecuteRequestBuildFailure)?;
-
-    let ret = exec(caller, execute_request, cb_alloc, cb_ctx);
-    if let Err(execute_error) = &ret {
-        error!(
-            ?execute_error,
-            ?smart_contract_addr,
-            ?entry_point,
-            "Failed to execute entry point"
-        );
-    }
-    ret
 }
 
 fn exec<S: GlobalStateReader + 'static>(
@@ -1133,131 +950,6 @@ pub fn casper_env_info<S: GlobalStateReader>(
     let env_info_bytes = borsh::to_vec(&env_info).map_err(|_| FatalHostError::Serialization)?;
     let write_len = env_info_bytes.len().min(info_size as usize);
     caller.memory_write(info_ptr.wrapped_try_into()?, &env_info_bytes[..write_len])?;
-
-    Ok(HOST_ERROR_SUCCESS)
-}
-
-/// Computes digest hash, using provided algorithm type.
-///
-/// # Arguments
-///
-/// * `in_ptr` - pointer to the location where argument bytes will be copied from the host side
-/// * `in_size` - size of output pointer
-/// * `hash_algo_type` - integer representation of HashAlgorithm enum variant
-/// * `out_ptr` - pointer to the location where argument bytes will be copied to the host side
-pub fn casper_generic_hash<S: GlobalStateReader>(
-    mut caller: impl Caller<Context = Context<S>>,
-    in_ptr: u32,
-    in_size: u32,
-    hash_algorithm: u32,
-    out_ptr: u32,
-) -> VMResult<u32> {
-    const DIGEST_LENGTH: usize = 32;
-
-    let in_bytes: Vec<u8> = caller.memory_read(in_ptr.wrapped_try_into()?, in_size as usize)?;
-
-    // Charge for parameter weights.
-    let generic_hash_cost = caller.context().config.host_ffi_opt_costs().generic_hash;
-
-    panic!("casper_generic_hash should not be used anymore");
-
-    let hash_algorithm =
-        HashAlgorithm::from_u32(hash_algorithm).ok_or(FatalHostError::TypeConversion)?;
-
-    let hashed_bytes = match hash_algorithm {
-        HashAlgorithm::Blake2b => {
-            let mut result = [0; DIGEST_LENGTH];
-            let mut hasher = Blake2bVar::new(DIGEST_LENGTH).map_err(|_| {
-                ExecuteError::Fatal(FatalHostError::CorruptExecutionState(
-                    "Error when creating instance of Blake2bVar hashing".to_owned(),
-                ))
-            })?;
-            hasher.update(in_bytes.as_ref());
-            hasher.finalize_variable(&mut result).ok();
-            result
-        }
-        HashAlgorithm::Blake3 => {
-            let mut result = [0; DIGEST_LENGTH];
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(in_bytes.as_ref());
-            let hash = hasher.finalize();
-            let hash_bytes: &[u8; DIGEST_LENGTH] = hash.as_bytes();
-            result.copy_from_slice(hash_bytes);
-            result
-        }
-        HashAlgorithm::Sha256 => Sha256::digest(in_bytes).into(),
-        HashAlgorithm::Keccak256 => {
-            use keccak_asm::Keccak256;
-            let mut result = [0u8; DIGEST_LENGTH];
-            let mut hasher = Keccak256::new();
-            KeccakDigest::update(&mut hasher, &in_bytes);
-            let hash = KeccakDigest::finalize(hasher);
-            result.copy_from_slice(&hash);
-            result
-        }
-    };
-
-    caller.memory_write(out_ptr.wrapped_try_into()?, &hashed_bytes)?;
-
-    Ok(HOST_ERROR_SUCCESS)
-}
-
-/// Recovers a Secp256k1 public key from a signed message
-/// and a signature used in the process of signing.
-///
-/// # Arguments
-///
-/// * `message_ptr` - pointer to the signed data
-/// * `message_size` - length of the signed data in bytes
-/// * `signature_ptr` - pointer to byte-encoded signature
-/// * `signature_size` - length of the byte-encoded signature
-/// * `public_key_ptr` - pointer to a buffer of size PublicKey::SECP256K1_LENGTH which will be
-///   populated with the recovered key's bytes representation
-/// * `recovery_id` - an integer value 0, 1, 2, or 3 used to select the correct public key from the
-///   signature:
-///   - Low bit (0/1): was the y-coordinate of the affine point resulting from the fixed-base
-///     multiplication 𝑘×𝑮 odd?
-///   - Hi bit (3/4): did the affine x-coordinate of 𝑘×𝑮 overflow the order of the scalar field,
-///     requiring a reduction when computing r?
-pub fn casper_recover_secp256k1<S: GlobalStateReader>(
-    mut caller: impl Caller<Context = Context<S>>,
-    message_ptr: u32,
-    message_size: u32,
-    signature_ptr: u32,
-    signature_size: u32,
-    public_key_ptr: u32,
-    recovery_id: u32,
-) -> VMResult<u32> {
-    let recover_secp256k1_cost = caller
-        .context()
-        .config
-        .host_ffi_opt_costs()
-        .recover_secp256k1;
-
-    panic!("casper_recover_secp256k1 should not be used anymore");
-
-    if recovery_id >= 4 {
-        return Ok(HOST_ERROR_INVALID_INPUT);
-    }
-
-    let message = caller.memory_read(message_ptr.wrapped_try_into()?, message_size as usize)?;
-    let signature_bytes =
-        caller.memory_read(signature_ptr.wrapped_try_into()?, signature_size as usize)?;
-    let Ok((signature, _)) = Signature::from_bytes(&signature_bytes) else {
-        return Ok(HOST_ERROR_INVALID_DATA);
-    };
-
-    let Ok(public_key) =
-        casper_types::crypto::recover_secp256k1(message, &signature, recovery_id as u8)
-    else {
-        return Ok(HOST_ERROR_INVALID_INPUT);
-    };
-
-    let Ok(key_bytes) = public_key.to_bytes() else {
-        return Ok(HOST_ERROR_PAYLOAD_TOO_LONG);
-    };
-
-    caller.memory_write(public_key_ptr.wrapped_try_into()?, &key_bytes)?;
 
     Ok(HOST_ERROR_SUCCESS)
 }

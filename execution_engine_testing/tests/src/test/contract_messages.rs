@@ -13,7 +13,7 @@ use casper_types::{
     bytesrepr::ToBytes,
     contract_messages::{MessageChecksum, MessagePayload, MessageTopicSummary, TopicNameHash},
     runtime_args, AddressableEntityHash, BlockGlobalAddr, BlockTime, CLValue, CoreConfig, Digest,
-    EntityAddr, HashAddr, HostFunction, HostFunctionCostsV1, HostFFIFunctionCosts, Key,
+    EntityAddr, HashAddr, HostFFIFunctionCosts, HostFunction, HostFunctionCostsV1, Key,
     MessageLimits, OpcodeCosts, PublicKey, RuntimeArgs, StorageCosts, StoredValue, SystemConfig,
     WasmConfig, WasmV1Config, WasmV2Config, DEFAULT_MAX_STACK_HEIGHT, DEFAULT_WASM_MAX_MEMORY,
     U512,

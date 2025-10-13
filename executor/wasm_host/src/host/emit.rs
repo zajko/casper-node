@@ -6,17 +6,16 @@ use casper_executor_wasm_common::error::{
 };
 use casper_executor_wasm_interface::{Caller, FatalHostError, VMError, VMResult};
 use casper_storage::{global_state::GlobalStateReader, tracking_copy::TrackingCopyExt};
-use casper_types::bytesrepr;
 use casper_types::{
     addressable_entity::MessageTopicError,
+    bytesrepr,
     bytesrepr::ToBytes,
     contract_messages::{Message, MessageAddr, MessagePayload, MessageTopicSummary},
     BlockGlobalAddr, BlockTime, CLValue, Digest, EntityAddr, Key, StoredValue,
 };
 use tracing::trace;
 
-use crate::context::Context;
-use crate::host::charge_gas_storage;
+use crate::{context::Context, host::charge_gas_storage};
 
 pub(crate) fn print_std(input: Bytes) -> VMResult<u32> {
     let msg = String::from_utf8_lossy(&input);

@@ -426,6 +426,8 @@ pub enum CryptoMethods {
     AltBn128Add,
     AltBn128Multiply,
     AltBn128Pairing,
+    GenericHash,
+    RecoverSecp256K1,
 }
 
 /// Available options for interacting with host-side cryptographic functions.
@@ -477,6 +479,8 @@ impl FFIMenu {
                 CryptoMethods::AltBn128Add => true,
                 CryptoMethods::AltBn128Multiply => true,
                 CryptoMethods::AltBn128Pairing => true,
+                CryptoMethods::GenericHash => true,
+                CryptoMethods::RecoverSecp256K1 => true,
             },
             FFIMenu::Emit(emit_methods) => match emit_methods {
                 EmitMethods::PrintStd => true,
@@ -522,6 +526,8 @@ impl TryFrom<u32> for FFIMenu {
             200 => Ok(FFIMenu::Crypto(CryptoMethods::AltBn128Add)),
             201 => Ok(FFIMenu::Crypto(CryptoMethods::AltBn128Multiply)),
             202 => Ok(FFIMenu::Crypto(CryptoMethods::AltBn128Pairing)),
+            203 => Ok(FFIMenu::Crypto(CryptoMethods::GenericHash)),
+            204 => Ok(FFIMenu::Crypto(CryptoMethods::RecoverSecp256K1)),
             300 => Ok(FFIMenu::Emit(EmitMethods::PrintStd)),
             301 => Ok(FFIMenu::Emit(EmitMethods::Native)),
             400 => Ok(FFIMenu::GlobalState(GlobalStateMethods::Read)),
@@ -562,6 +568,8 @@ impl From<FFIMenu> for u32 {
                 CryptoMethods::AltBn128Add => 200,
                 CryptoMethods::AltBn128Multiply => 201,
                 CryptoMethods::AltBn128Pairing => 202,
+                CryptoMethods::GenericHash => 203,
+                CryptoMethods::RecoverSecp256K1 => 204,
             },
             FFIMenu::Emit(emit) => match emit {
                 EmitMethods::PrintStd => 300,

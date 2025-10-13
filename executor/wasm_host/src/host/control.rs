@@ -1,28 +1,29 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use casper_executor_wasm_common::chain_utils::{
-    compute_next_contract_hash_version, compute_wasm_bytecode_hash,
+use casper_executor_wasm_common::{
+    chain_utils::{compute_next_contract_hash_version, compute_wasm_bytecode_hash},
+    error::{
+        CALLEE_NOT_CALLABLE, CALLEE_SUCCEEDED, HOST_ERROR_INVALID_DATA, HOST_ERROR_INVALID_INPUT,
+        HOST_LOCKED_PACKAGE, HOST_NO_ACTIVE_CONTRACT,
+    },
 };
-use casper_executor_wasm_common::error::{
-    CALLEE_NOT_CALLABLE, CALLEE_SUCCEEDED, HOST_ERROR_INVALID_DATA, HOST_ERROR_INVALID_INPUT,
-    HOST_LOCKED_PACKAGE, HOST_NO_ACTIVE_CONTRACT,
+use casper_executor_wasm_interface::{
+    executor::{ExecuteRequestBuilder, ExecuteResult, ExecutionKind, Executor},
+    Caller, FatalHostError, VMError, VMResult,
 };
-use casper_executor_wasm_interface::executor::{
-    ExecuteRequestBuilder, ExecuteResult, ExecutionKind, Executor,
-};
-use casper_executor_wasm_interface::{Caller, FatalHostError, VMError, VMResult};
 use casper_storage::global_state::GlobalStateReader;
-use casper_types::contracts::ContractHash;
 use casper_types::{
-    bytesrepr, AddressableEntity, BlockHash, ByteCode, ByteCodeAddr, ByteCodeHash, ByteCodeKind,
-    Contract, ContractRuntimeTag, ContractWasmHash, EntityKind, HashAddr, ProtocolVersion,
+    bytesrepr, contracts::ContractHash, AddressableEntity, BlockHash, ByteCode, ByteCodeAddr,
+    ByteCodeHash, ByteCodeKind, Contract, ContractRuntimeTag, ContractWasmHash, Digest, EntityAddr,
+    EntityKind, HashAddr, Key, ProtocolVersion, StoredValue,
 };
-use casper_types::{Digest, EntityAddr, Key, StoredValue};
 use tracing::{error, info, warn};
 
-use crate::context::Context;
-use crate::host::{exec, metered_write};
+use crate::{
+    context::Context,
+    host::{exec, metered_write},
+};
 
 pub(crate) fn host_call<S: GlobalStateReader + 'static>(
     caller: &mut impl Caller<Context = Context<S>>,

@@ -272,6 +272,8 @@ pub enum CryptoFunctionOption {
     AltBn128Add = 200,
     AltBn128Multiply = 201,
     AltBn128Pairing = 202,
+    GenericHash = 203,
+    RecoverSecp256K1 = 204,
 }
 
 impl From<CryptoFunctionOption> for u32 {
@@ -290,6 +292,10 @@ impl TryFrom<u32> for CryptoFunctionOption {
             Ok(CryptoFunctionOption::AltBn128Multiply)
         } else if value == 202 {
             Ok(CryptoFunctionOption::AltBn128Pairing)
+        } else if value == 203 {
+            Ok(CryptoFunctionOption::GenericHash)
+        } else if value == 204 {
+            Ok(CryptoFunctionOption::RecoverSecp256K1)
         } else {
             Err(())
         }
