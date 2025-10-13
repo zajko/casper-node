@@ -443,7 +443,7 @@ pub enum IOMethods {
 
 /// Specific subsection of FFIMenu actions that will be executed as system contract calls
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SystemContractCall {
+pub enum SystemContractMenu {
     Mint(MintMethods),
     Auction(AuctionMethods),
 }
@@ -544,12 +544,12 @@ pub enum ExecutionKind {
         entry_point: String,
     },
     /// Interact with the system.
-    System(SystemContractCall),
+    System(SystemContractMenu),
 }
 
 impl ExecutionKind {
     /// Returns system menu selection if relevant.
-    pub fn ffi_selection(&self) -> Option<SystemContractCall> {
+    pub fn ffi_selection(&self) -> Option<SystemContractMenu> {
         match self {
             ExecutionKind::SessionBytes(_) | ExecutionKind::Stored { .. } => None,
             ExecutionKind::System(menu) => Some(menu.clone()),

@@ -18,7 +18,7 @@ mod withdraw_bid;
 
 use bytes::Bytes;
 use casper_executor_wasm_common::error::CallError;
-use casper_executor_wasm_interface::{executor::SystemContractCall, FatalHostError, GasUsage};
+use casper_executor_wasm_interface::{executor::SystemContractMenu, FatalHostError, GasUsage};
 use casper_storage::{
     global_state::GlobalStateReader,
     system::runtime_native::{Id, RuntimeNative},
@@ -256,7 +256,7 @@ pub fn native_exec<A, T: ToBytes, R: GlobalStateReader + 'static>(
     initiator: AccountHash,
     caller_key: Key,
     input: Bytes,
-    system_menu_selection: SystemContractCall,
+    system_menu_selection: SystemContractMenu,
 ) -> Result<ExecuteResult, ExecuteError> {
     let (caller_key, entity_addr) = if let Key::Account(account_hash) = caller_key {
         (caller_key, EntityAddr::Account(account_hash.value()))
@@ -295,7 +295,7 @@ pub fn native_exec<A, T: ToBytes, R: GlobalStateReader + 'static>(
     };
 
     let ret: Result<Option<Bytes>, DispatchError> = match system_menu_selection {
-        SystemContractCall::Auction(method) => match method {
+        SystemContractMenu::Auction(method) => match method {
             AuctionMethods::Activate => {
                 let ret = bytesrepr::deserialize_from_slice::<&Bytes, (PublicKey,)>(&input);
                 if let Err(err) = &ret {
@@ -618,7 +618,7 @@ pub fn native_exec<A, T: ToBytes, R: GlobalStateReader + 'static>(
                 .map(|_| None)
             }
         },
-        SystemContractCall::Mint(method) => match method {
+        SystemContractMenu::Mint(method) => match method {
             MintMethods::Burn => {
                 // VM2 only allows userland burning from caller's main purse
                 let ret = bytesrepr::deserialize_from_slice::<&Bytes, (u64,)>(&input);

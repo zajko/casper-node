@@ -205,6 +205,8 @@ pub enum CallError {
     CalleeGasDepleted,
     NotCallable,
     OutputNotDeserializable,
+    GotOutputDataWhenNoneExpected,
+    OutputDataExpected,
 }
 
 impl fmt::Display for CallError {
@@ -215,6 +217,10 @@ impl fmt::Display for CallError {
             CallError::CalleeGasDepleted => write!(f, "callee gas depleted"),
             CallError::NotCallable => write!(f, "not callable"),
             CallError::OutputNotDeserializable => write!(f, "output not deserializable"),
+            CallError::GotOutputDataWhenNoneExpected => {
+                write!(f, "got output data when none expected")
+            }
+            CallError::OutputDataExpected => write!(f, "output data expected"),
         }
     }
 }

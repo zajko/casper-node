@@ -22,8 +22,10 @@ use casper_executor_wasm_host::{
 };
 use casper_executor_wasm_interface::{
     executor::{
-        ExecuteError, ExecuteRequest, ExecuteRequestBuilder, ExecuteResult,
-        ExecuteWithProviderError, ExecuteWithProviderResult, ExecutionKind, Executor, FFIMenu,
+        AuctionMethods, ControlMethods, CryptoMethods, EmitMethods, ExecuteError, ExecuteRequest,
+        ExecuteRequestBuilder, ExecuteResult, ExecuteWithProviderError, ExecuteWithProviderResult,
+        ExecutionKind, Executor, FFIMenu, GlobalStateMethods, IOMethods, MintMethods,
+        SystemContractMenu,
     },
     sandboxed_execution::{
         SandboxedExecutionError, SandboxedExecutionRequest, SandboxedExecutionResult,
@@ -60,7 +62,7 @@ use casper_types::{
 };
 use install::{InstallContractError, InstallContractRequest, InstallContractResult};
 use parking_lot::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 #[cfg(any(feature = "testing", test))]
 pub mod chainspec_config;
@@ -532,7 +534,7 @@ impl ExecutorV2 {
 
     fn execute_ffi<R: GlobalStateReader + 'static>(
         &self,
-        menu_selection: FFIMenu,
+        menu_selection: SystemContractMenu,
         tracking_copy: TrackingCopy<R>,
         execute_request: ExecuteRequest,
     ) -> Result<ExecuteResult, ExecuteError> {
@@ -543,7 +545,6 @@ impl ExecutorV2 {
             input,
             transaction_hash,
             address_generator,
-            sandboxed,
             runtime_native_config,
             ..
         } = execute_request;
@@ -928,7 +929,7 @@ impl ExecutorV2 {
                 return Err(ExecuteError::Fatal(FatalHostError::DispatchSystemContract));
             }
         };
-        let ffi_call_costs = build_ffi_call_costs(&self.config);
+        let ffi_call_costs = self.build_ffi_call_costs(&self.config);
         let context = Context {
             initiator,
             config: self.config.wasm_config,
@@ -1095,25 +1096,20 @@ impl ExecutorV2 {
 
     fn build_ffi_call_costs(&self, config: &ExecutorConfig) -> BTreeMap<u32, HostFFIFunctionCost> {
         FFIMenu::all_ffi_options()
-            .iter()
             .map(|ffi_opt| {
-                let ffi_function_cost = match ffi_opt {
+                let ffi_function_cost = match &ffi_opt {
                     FFIMenu::Mint(mint_methods) => {
                         let base_cost = match mint_methods {
-                            MintMethods::Burn => HostFFIFunctionCost::fixed(config.mint_costs.burn),
-                            MintMethods::Transfer => {
-                                HostFFIFunctionCost::fixed(config.mint_costs.transfer)
-                            }
-                            MintMethods::TransferPurse => {
-                                HostFFIFunctionCost::fixed(config.mint_costs.transfer)
-                            }
+                            MintMethods::Burn => config.mint_costs.burn,
+                            MintMethods::Transfer => config.mint_costs.transfer,
+                            MintMethods::TransferPurse => config.mint_costs.transfer,
                         };
-                        HostFFIFunctionCost::fixed(base_cost)
+                        HostFFIFunctionCost::fixed(base_cost as u64)
                     }
                     FFIMenu::Auction(auction_methods) => {
                         let base_cost = match auction_methods {
                             AuctionMethods::Activate => config.auction_costs.activate_bid,
-                            AuctionMethods::Bid => config.auction_costs.auction_bid,
+                            AuctionMethods::Bid => config.auction_costs.add_bid,
                             AuctionMethods::Withdraw => config.auction_costs.withdraw_bid,
                             AuctionMethods::Delegate => config.auction_costs.delegate,
                             AuctionMethods::Undelegate => config.auction_costs.undelegate,

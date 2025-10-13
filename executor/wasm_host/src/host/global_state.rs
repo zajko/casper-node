@@ -563,7 +563,7 @@ pub(crate) fn host_env_balance<S: GlobalStateReader + 'static>(
 
     Ok((
         Some(Bytes::from(total_balance.to_le_bytes().to_vec())),
-        HOST_ERROR_NOT_FOUND,
+        HOST_ERROR_SUCCESS,
     ))
 }
 

@@ -8,24 +8,18 @@ use crate::abi::{CasperABI, EnumVariant};
 use crate::{
     compat::types::{CLType, CLTyped},
     log,
-    prelude::{
-        ffi::c_void,
-        marker::PhantomData,
-        mem::MaybeUninit,
-        ptr::{self, NonNull},
-        *,
-    },
+    prelude::{ffi::c_void, marker::PhantomData, mem::MaybeUninit, ptr, *},
     reserve_vec_space,
     serializers::borsh::{BorshDeserialize, BorshSerialize},
     types::{
-        Address, CallError, EmitFunctionOption, GlobalStateFunctionOption, HashAlgorithm,
-        IOFunctionOption, PublicKey,
+        Address, CallError, ControlFunctionOption, CryptoFunctionOption, EmitFunctionOption,
+        GlobalStateFunctionOption, HashAlgorithm, IOFunctionOption, PublicKey,
     },
     Message, ToCallData,
 };
 
 use crate::types::{EntityAddr, SystemContractOption};
-use casper_contract_sdk_sys::EnvInfo;
+use casper_contract_sdk_sys::{CreateResult, EnvInfo};
 use casper_executor_wasm_common::{
     error::{result_from_code, HostResult, HOST_ERROR_SUCCESS},
     flags::ReturnFlags,
@@ -98,11 +92,6 @@ pub fn read<F: FnOnce(usize) -> Option<ptr::NonNull<u8>>>(
         Keyspace::AllNamedKeys => (KeyspaceTag::AllNamedKeys as u64, &[][..]),
     };
 
-    let mut info = casper_contract_sdk_sys::ReadInfo {
-        data_ptr: ptr::null(),
-        data_size: 0,
-    };
-
     extern "C" fn alloc_cb<F: FnOnce(usize) -> Option<ptr::NonNull<u8>>>(
         len: usize,
         ctx: *mut c_void,
@@ -117,12 +106,12 @@ pub fn read<F: FnOnce(usize) -> Option<ptr::NonNull<u8>>>(
 
     let ctx = &Some(f) as *const _ as *mut _;
 
+    let input_data = borsh::to_vec(&(key_space, key_bytes)).expect("Expected borsh to work");
     let ret = unsafe {
-        casper_contract_sdk_sys::casper_read(
-            key_space,
-            key_bytes.as_ptr(),
-            key_bytes.len(),
-            &mut info as *mut casper_contract_sdk_sys::ReadInfo,
+        casper_contract_sdk_sys::casper_ffi(
+            GlobalStateFunctionOption::Read.into(),
+            input_data.as_ptr(),
+            input_data.len(),
             alloc_cb::<F>,
             ctx,
         )
@@ -148,13 +137,21 @@ pub fn write(key: Keyspace, value: &[u8]) -> Result<(), HostResult> {
         Keyspace::NamedKey(key_bytes) => (KeyspaceTag::NamedKey as u64, key_bytes.as_bytes()),
         Keyspace::AllNamedKeys => (KeyspaceTag::AllNamedKeys as u64, &[][..]),
     };
+
+    let input_data = borsh::to_vec(&(key_space, key_bytes, value)).expect("Expected borsh to work");
+    extern "C" fn alloc_cb(_len: usize, _ctx: *mut c_void) -> *mut u8 {
+        // Write shouldn't have any output data and should not return anything
+        ptr::null_mut()
+    }
+
+    let ctx = &None::<u8> as *const _ as *mut _;
     let ret = unsafe {
-        casper_contract_sdk_sys::casper_write(
-            key_space,
-            key_bytes.as_ptr(),
-            key_bytes.len(),
-            value.as_ptr(),
-            value.len(),
+        casper_contract_sdk_sys::casper_ffi(
+            GlobalStateFunctionOption::Read.into(),
+            input_data.as_ptr(),
+            input_data.len(),
+            alloc_cb,
+            ctx,
         )
     };
     result_from_code(ret)
@@ -168,8 +165,21 @@ pub fn remove(key: Keyspace) -> Result<(), HostResult> {
         Keyspace::NamedKey(key_bytes) => (KeyspaceTag::NamedKey as u64, key_bytes.as_bytes()),
         Keyspace::AllNamedKeys => (KeyspaceTag::AllNamedKeys as u64, &[][..]),
     };
+    let input_data = borsh::to_vec(&(key_space, key_bytes)).expect("Expected borsh to work");
+    extern "C" fn alloc_cb(_len: usize, _ctx: *mut c_void) -> *mut u8 {
+        // Write shouldn't have any output data and should not return anything
+        ptr::null_mut()
+    }
+
+    let ctx = &None::<u8> as *const _ as *mut _;
     let ret = unsafe {
-        casper_contract_sdk_sys::casper_remove(key_space, key_bytes.as_ptr(), key_bytes.len())
+        casper_contract_sdk_sys::casper_ffi(
+            GlobalStateFunctionOption::Remove.into(),
+            input_data.as_ptr(),
+            input_data.len(),
+            alloc_cb,
+            ctx,
+        )
     };
     result_from_code(ret)
 }
@@ -179,60 +189,33 @@ pub fn create(
     code: Option<&[u8]>,
     transferred_value: u64,
     constructor: Option<&str>,
-    input_data: Option<&[u8]>,
+    constructor_data: Option<&[u8]>,
     seed: Option<&[u8; 32]>,
-) -> Result<casper_contract_sdk_sys::CreateResult, CallError> {
-    let (code_ptr, code_size): (*const u8, usize) = match code {
-        Some(code) => (code.as_ptr(), code.len()),
-        None => (ptr::null(), 0),
-    };
-
-    let mut result = MaybeUninit::uninit();
-
-    let call_error = unsafe {
-        casper_contract_sdk_sys::casper_create(
-            code_ptr,
-            code_size,
-            transferred_value,
-            constructor.map(|s| s.as_ptr()).unwrap_or(ptr::null()),
-            constructor.map(|s| s.len()).unwrap_or(0),
-            input_data.map(|s| s.as_ptr()).unwrap_or(ptr::null()),
-            input_data.map(|s| s.len()).unwrap_or(0),
-            seed.map(|s| s.as_ptr()).unwrap_or(ptr::null()),
-            seed.map(|s| s.len()).unwrap_or(0),
-            result.as_mut_ptr(),
-        )
-    };
-
-    if call_error == 0 {
-        let result = unsafe { result.assume_init() };
-        Ok(result)
-    } else {
-        Err(CallError::try_from(call_error).expect("Unexpected error code"))
+) -> Result<CreateResult, CallError> {
+    let input_data = borsh::to_vec(&(transferred_value, code, seed, constructor, constructor_data))
+        .expect("Expected borsh to work");
+    extern "C" fn alloc_cb(_len: usize, _ctx: *mut c_void) -> *mut u8 {
+        // Create should use the `alloc_ctx` mechanism to get the output data
+        ptr::null_mut()
     }
-}
-
-pub(crate) fn call_into<F: FnOnce(usize) -> Option<ptr::NonNull<u8>>>(
-    address: &Address,
-    transferred_value: u64,
-    entry_point: &str,
-    input_data: &[u8],
-    alloc: Option<F>,
-) -> Result<(), CallError> {
-    let result_code = unsafe {
-        casper_contract_sdk_sys::casper_call(
-            address.as_ptr(),
-            address.len(),
-            transferred_value,
-            entry_point.as_ptr(),
-            entry_point.len(),
+    let result = MaybeUninit::<CreateResult>::zeroed();
+    let ret = unsafe {
+        casper_contract_sdk_sys::casper_ffi(
+            ControlFunctionOption::Create.into(),
             input_data.as_ptr(),
             input_data.len(),
-            alloc_callback::<F>,
-            &alloc as *const _ as *mut _,
+            alloc_cb,
+            result.as_ptr() as *const _ as *mut _,
         )
     };
-    call_result_from_code(result_code)
+
+    match ret {
+        HOST_ERROR_SUCCESS => Ok(unsafe { result.assume_init() }),
+        other_status => {
+            // #TODO! fix this wrap
+            Err(CallError::try_from(other_status).expect("Couldn't interpret error from host"))
+        }
+    }
 }
 
 pub(crate) fn call_ffi<F: FnOnce(usize) -> Option<ptr::NonNull<u8>>>(
@@ -284,21 +267,9 @@ pub fn casper_call(
     entry_point: &str,
     input_data: &[u8],
 ) -> (Option<Vec<u8>>, Result<(), CallError>) {
-    let mut output = None;
-    let result_code = call_into(
-        address,
-        transferred_value,
-        entry_point,
-        input_data,
-        Some(|size| {
-            let mut vec = Vec::new();
-            reserve_vec_space(&mut vec, size);
-            let result = Some(unsafe { ptr::NonNull::new_unchecked(vec.as_mut_ptr()) });
-            output = Some(vec);
-            result
-        }),
-    );
-    (output, result_code)
+    let input_data = borsh::to_vec(&(address, input_data, entry_point, transferred_value))
+        .expect("Expected borsh to work");
+    casper_ffi(ControlFunctionOption::Call.into(), &input_data)
 }
 
 /// Upgrade the contract.
@@ -307,27 +278,14 @@ pub fn upgrade(
     entry_point: Option<&str>,
     input_data: Option<&[u8]>,
 ) -> Result<(), CallError> {
-    let code_ptr = code.as_ptr();
-    let code_size = code.len();
-    let entry_point_ptr = entry_point.map(str::as_ptr).unwrap_or(ptr::null());
-    let entry_point_size = entry_point.map(str::len).unwrap_or(0);
-    let input_ptr = input_data.map(|s| s.as_ptr()).unwrap_or(ptr::null());
-    let input_size = input_data.map(|s| s.len()).unwrap_or(0);
+    let input_data =
+        borsh::to_vec(&(code, entry_point, input_data)).expect("Expected borsh to work");
+    let (output_data, res) = casper_ffi(ControlFunctionOption::Upgrade.into(), &input_data);
 
-    let result_code = unsafe {
-        casper_contract_sdk_sys::casper_upgrade(
-            code_ptr,
-            code_size,
-            entry_point_ptr,
-            entry_point_size,
-            input_ptr,
-            input_size,
-        )
-    };
-    match call_result_from_code(result_code) {
-        Ok(()) => Ok(()),
-        Err(err) => Err(err),
+    if output_data.is_some() {
+        return Err(CallError::GotOutputDataWhenNoneExpected);
     }
+    res
 }
 
 /// Read from the global state into a vector.
@@ -540,17 +498,17 @@ pub fn get_balance_of(entity_kind: &Entity) -> u64 {
         Entity::Account(addr) => (0, addr),
         Entity::Contract(addr) => (1, addr),
     };
-    let mut output: MaybeUninit<u64> = MaybeUninit::uninit();
-    let ret = unsafe {
-        casper_contract_sdk_sys::casper_env_balance(
-            kind,
-            addr.as_ptr(),
-            addr.len(),
-            output.as_mut_ptr().cast(),
-        )
-    };
-    if ret == 1 {
-        unsafe { output.assume_init() }
+
+    let input_data = borsh::to_vec(&(kind, addr)).expect("Expected borsh to work");
+    let (output_data, res) = casper_ffi(GlobalStateFunctionOption::GetBalance.into(), &input_data);
+
+    if res.is_ok() {
+        output_data
+            .map(|bytes| match borsh::from_slice::<[u8; 8]>(&bytes) {
+                Ok(bytes) => u64::from_le_bytes(bytes),
+                Err(_) => panic!("Unexpected format of balance from host"),
+            })
+            .unwrap_or_default()
     } else {
         0
     }
@@ -586,17 +544,17 @@ pub fn get_block_time() -> u64 {
 }
 
 #[inline]
-pub fn generic_hash(data: &[u8], algorithm: HashAlgorithm) -> Result<[u8; 32], HostResult> {
-    let output = [0; 32];
-    let ret = unsafe {
-        casper_contract_sdk_sys::casper_generic_hash(
-            data.as_ptr(),
-            data.len(),
-            output.as_ptr(),
-            algorithm as usize,
-        )
-    };
-    result_from_code(ret).map(|_| output)
+pub fn generic_hash(data: &[u8], algorithm: HashAlgorithm) -> Result<[u8; 32], CallError> {
+    let input_data = borsh::to_vec(&(algorithm, data)).expect("Expected borsh to work");
+    let (output_data, res) = casper_ffi(CryptoFunctionOption::GenericHash.into(), &input_data);
+    res?;
+    match output_data {
+        Some(bytes) => match borsh::from_slice::<[u8; 32]>(&bytes) {
+            Ok(hash) => Ok(hash),
+            Err(_) => Err(CallError::OutputNotDeserializable),
+        },
+        None => Err(CallError::OutputDataExpected),
+    }
 }
 
 #[inline]
@@ -604,40 +562,35 @@ pub fn recover_secp256k1(
     message: &[u8],
     signature: &[u8],
     recovery_id: u32,
-) -> Result<PublicKey, HostResult> {
-    let output = [0; 34]; // This fits 33 SECP256K1 PK bytes + 1 leading variant tag
-
-    let ret = unsafe {
-        casper_contract_sdk_sys::casper_recover_secp256k1(
-            message.as_ptr(),
-            message.len(),
-            signature.as_ptr(),
-            signature.len(),
-            output.as_ptr(),
-            recovery_id,
-        )
+) -> Result<PublicKey, CallError> {
+    let input_data =
+        borsh::to_vec(&(recovery_id, message, signature)).expect("Expected borsh to work");
+    let (output_data, res) = casper_ffi(CryptoFunctionOption::GenericHash.into(), &input_data);
+    res?;
+    let output = match output_data {
+        Some(bytes) => match borsh::from_slice::<[u8; 34]>(&bytes) {
+            Ok(hash) => hash,
+            Err(_) => return Err(CallError::OutputNotDeserializable),
+        },
+        None => return Err(CallError::OutputDataExpected),
     };
-
     let secp_bytes = output[1..].try_into().unwrap();
-
-    result_from_code(ret).map(|_| PublicKey::Secp256k1(secp_bytes))
+    Ok(PublicKey::Secp256k1(secp_bytes))
 }
 
 #[doc(hidden)]
-pub fn emit(topic: &str, payload: &[u8]) -> Result<(), HostResult> {
-    let ret = unsafe {
-        casper_contract_sdk_sys::casper_emit(
-            topic.as_ptr(),
-            topic.len(),
-            payload.as_ptr(),
-            payload.len(),
-        )
-    };
-    result_from_code(ret)
+pub fn emit(topic: &str, payload: &[u8]) -> Result<(), CallError> {
+    let input_data = borsh::to_vec(&(topic, payload)).expect("Expected borsh to work");
+    let (output_data, res) = casper_ffi(EmitFunctionOption::Native.into(), &input_data);
+    res?;
+    match output_data {
+        Some(_) => Err(CallError::GotOutputDataWhenNoneExpected),
+        None => Ok(()),
+    }
 }
 
 /// Emit a message.
-pub fn emit_message<M>(message: M) -> Result<(), HostResult>
+pub fn emit_message<M>(message: M) -> Result<(), CallError>
 where
     M: Message,
 {

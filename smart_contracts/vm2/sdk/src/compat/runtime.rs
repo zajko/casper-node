@@ -1,9 +1,10 @@
 use borsh::BorshDeserialize;
-use casper_executor_wasm_common::{error::HostResult, flags::ReturnFlags};
+use casper_executor_wasm_common::flags::ReturnFlags;
 
 use crate::{
-    casper,
+    casper::{self, casper_ffi},
     compat::types::{CLValue, RuntimeArgs},
+    types::{CallError, EmitFunctionOption},
 };
 
 fn get_runtime_args() -> RuntimeArgs {
@@ -69,8 +70,17 @@ pub fn get_immediate_caller() -> [u8; 32] {
 }
 
 #[inline]
-pub fn emit_message(topic_name: &str, message: &[u8]) -> Result<(), HostResult> {
-    casper::emit(topic_name, message)
+pub fn emit_message(topic_name: &str, message: &[u8]) -> Result<(), CallError> {
+    let args = (topic_name, message);
+    let arg_bytes = borsh::to_vec(&args).expect("Expected borsh to work");
+
+    let (output, result) = casper_ffi(EmitFunctionOption::Native.into(), &arg_bytes);
+    result?;
+
+    match output {
+        Some(_) => Err(CallError::GotOutputDataWhenNoneExpected),
+        None => Ok(()),
+    }
 }
 
 #[inline]
