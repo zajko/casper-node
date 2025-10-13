@@ -4,7 +4,7 @@ use borsh::BorshSerialize;
 #[derive(Copy, Clone, Debug, PartialEq, BorshSerialize)]
 
 pub(crate) struct CreateResult {
-    pub(crate) package_address: [u8; 32],
+    pub(crate) package_addr: [u8; 32],
 }
 
 const _: () = assert!(

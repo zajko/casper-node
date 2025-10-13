@@ -329,6 +329,7 @@ pub enum GlobalStateFunctionOption {
     Remove = 402,
     GetBalance = 403,
     GetInfo = 404,
+    Create = 405,
 }
 
 impl From<GlobalStateFunctionOption> for u32 {
@@ -351,6 +352,8 @@ impl TryFrom<u32> for GlobalStateFunctionOption {
             Ok(GlobalStateFunctionOption::GetBalance)
         } else if value == 404 {
             Ok(GlobalStateFunctionOption::GetInfo)
+        } else if value == 405 {
+            Ok(GlobalStateFunctionOption::Create)
         } else {
             Err(())
         }

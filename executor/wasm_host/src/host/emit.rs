@@ -4,9 +4,7 @@ use casper_executor_wasm_common::error::{
     HOST_ERROR_MESSAGE_TOPIC_FULL, HOST_ERROR_PAYLOAD_TOO_LONG, HOST_ERROR_SUCCESS,
     HOST_ERROR_TOO_MANY_TOPICS, HOST_ERROR_TOPIC_TOO_LONG,
 };
-use casper_executor_wasm_interface::{
-    executor::ExecuteError, Caller, FatalHostError, VMError, VMResult,
-};
+use casper_executor_wasm_interface::{Caller, FatalHostError, VMError, VMResult};
 use casper_storage::{global_state::GlobalStateReader, tracking_copy::TrackingCopyExt};
 use casper_types::bytesrepr;
 use casper_types::{

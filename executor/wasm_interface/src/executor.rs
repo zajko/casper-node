@@ -387,13 +387,13 @@ pub enum GlobalStateMethods {
     Remove,
     GetBalance,
     GetInfo,
+    Create,
 }
 
 /// Available options for interacting with functions interacting
 /// with other contracts and control flow
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlMethods {
-    Create,
     Call,
     Upgrade,
 }
@@ -488,9 +488,9 @@ impl FFIMenu {
                 GlobalStateMethods::Remove => false,
                 GlobalStateMethods::GetBalance => true,
                 GlobalStateMethods::GetInfo => true,
+                GlobalStateMethods::Create => false,
             },
             FFIMenu::Control(control_methods) => match control_methods {
-                ControlMethods::Create => false,
                 ControlMethods::Call => false,
                 ControlMethods::Upgrade => false,
             },
@@ -529,9 +529,9 @@ impl TryFrom<u32> for FFIMenu {
             402 => Ok(FFIMenu::GlobalState(GlobalStateMethods::Remove)),
             403 => Ok(FFIMenu::GlobalState(GlobalStateMethods::GetBalance)),
             404 => Ok(FFIMenu::GlobalState(GlobalStateMethods::GetInfo)),
-            500 => Ok(FFIMenu::Control(ControlMethods::Create)),
-            501 => Ok(FFIMenu::Control(ControlMethods::Call)),
-            502 => Ok(FFIMenu::Control(ControlMethods::Upgrade)),
+            405 => Ok(FFIMenu::GlobalState(GlobalStateMethods::Create)),
+            500 => Ok(FFIMenu::Control(ControlMethods::Call)),
+            501 => Ok(FFIMenu::Control(ControlMethods::Upgrade)),
             600 => Ok(FFIMenu::IO(IOMethods::Return)),
             601 => Ok(FFIMenu::IO(IOMethods::CopyInput)),
             _ => Err(()),
@@ -573,11 +573,11 @@ impl From<FFIMenu> for u32 {
                 GlobalStateMethods::Remove => 402,
                 GlobalStateMethods::GetBalance => 403,
                 GlobalStateMethods::GetInfo => 404,
+                GlobalStateMethods::Create => 405,
             },
             FFIMenu::Control(control) => match control {
-                ControlMethods::Create => 500,
-                ControlMethods::Call => 501,
-                ControlMethods::Upgrade => 502,
+                ControlMethods::Call => 500,
+                ControlMethods::Upgrade => 501,
             },
             FFIMenu::IO(io) => match io {
                 IOMethods::Return => 600,

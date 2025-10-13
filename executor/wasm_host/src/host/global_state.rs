@@ -1,34 +1,45 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use bytes::Bytes;
+use casper_executor_wasm_common::chain_utils::{self, compute_next_contract_hash_version};
 use casper_executor_wasm_common::entry_point::{
     ENTRY_POINT_PAYMENT_CALLER, ENTRY_POINT_PAYMENT_DIRECT_INVOCATION_ONLY,
     ENTRY_POINT_PAYMENT_SELF_ONWARD,
 };
 use casper_executor_wasm_common::error::{
-    HOST_ERROR_INVALID_DATA, HOST_ERROR_INVALID_INPUT, HOST_ERROR_NOT_FOUND, HOST_ERROR_SUCCESS,
+    CALLEE_SUCCEEDED, CALLEE_TRAPPED, HOST_ERROR_CL_VALUE, HOST_ERROR_INVALID_DATA,
+    HOST_ERROR_INVALID_INPUT, HOST_ERROR_NOT_FOUND, HOST_ERROR_SUCCESS,
 };
 use casper_executor_wasm_common::keyspace::{Keyspace, KeyspaceTag};
-use casper_executor_wasm_interface::{
-    executor::ExecuteError, Caller, FatalHostError, VMError, VMResult,
+use casper_executor_wasm_interface::executor::{
+    ExecuteRequestBuilder, ExecuteResult, ExecutionKind, Executor,
 };
+use casper_executor_wasm_interface::{Caller, FatalHostError, VMError, VMResult};
 use casper_storage::{global_state::GlobalStateReader, tracking_copy::TrackingCopyExt};
-use casper_types::addressable_entity::NamedKeyValue;
-use casper_types::{
-    addressable_entity::MessageTopicError,
-    bytesrepr::ToBytes,
-    contract_messages::{Message, MessageAddr, MessagePayload, MessageTopicSummary},
-    BlockGlobalAddr, BlockTime, CLValue, Digest, EntityAddr, Key, StoredValue,
+use casper_types::account::AccountHash;
+use casper_types::addressable_entity::{
+    ActionThresholds, AssociatedKeys, NamedKeyAddr, NamedKeyValue,
 };
+use casper_types::contracts::{ContractHash, ContractPackage, ContractPackageHash, EntryPoints};
 use casper_types::{
-    bytesrepr, AccessRights, CLType, EntryPointPayment, EntryPointValue, NamedKeys,
+    bytesrepr, AccessRights, AddressableEntity, BlockHash, ByteCode, ByteCodeAddr, ByteCodeHash,
+    ByteCodeKind, CLType, Contract, ContractRuntimeTag, ContractWasmHash, EntityKind,
+    EntryPointPayment, EntryPointValue, HashAddr, NamedKeys, Package, PackageHash, ProtocolVersion,
+    URef,
 };
+use casper_types::{bytesrepr::ToBytes, CLValue, Digest, EntityAddr, Key, StoredValue};
+use either::Either;
 use num_traits::FromPrimitive;
-use tracing::error;
+use tracing::{debug, error, warn};
 
+use crate::abi::{CreateResult, EnvInfo};
 use crate::context::Context;
-use crate::host::{context_to_entity_addr, metered_write};
+use crate::host::{
+    context_to_entity_addr, metered_write, EntityKindTag, NAME_FOR_V2_CONTRACT_MAIN_PURSE,
+};
+use crate::system;
 
 /// Read value under from global state under a key.
 pub(crate) fn host_read<S: GlobalStateReader + 'static>(
@@ -326,6 +337,555 @@ pub(crate) fn host_write<S: GlobalStateReader + 'static>(
     metered_write(caller, global_state_key, stored_value)?;
 
     Ok(HOST_ERROR_SUCCESS)
+}
+
+/// Remove value under a key.
+///
+/// This produces a transformation of Prune to the global state. Keep in mind that technically the
+/// data is not removed from the global state as it still there, it's just not reachable anymore
+/// from the newly created tip.
+///
+/// The name for this host function is `remove` to keep it simple and consistent with read/write
+/// verbs, and also consistent with the rust stdlib vocabulary i.e. `V`
+pub(crate) fn host_remove<S: GlobalStateReader + 'static>(
+    caller: &mut impl Caller<Context = Context<S>>,
+    input: Bytes,
+) -> VMResult<u32> {
+    let (key_space, key_payload_bytes) =
+        match bytesrepr::deserialize_from_slice::<&Bytes, (u64, Vec<u8>)>(&input) {
+            Ok(res) => res,
+            Err(_) => {
+                return Ok(HOST_ERROR_INVALID_INPUT);
+            }
+        };
+
+    let keyspace_tag = match KeyspaceTag::from_u64(key_space) {
+        Some(keyspace_tag) => keyspace_tag,
+        None => {
+            // Unknown keyspace received, return error
+            return Ok(HOST_ERROR_NOT_FOUND);
+        }
+    };
+
+    let keyspace = match keyspace_tag {
+        KeyspaceTag::State => Keyspace::State,
+        KeyspaceTag::Context => Keyspace::Context(&key_payload_bytes),
+        KeyspaceTag::NamedKey => {
+            let key_name = match std::str::from_utf8(&key_payload_bytes) {
+                Ok(key_name) => key_name,
+                Err(_) => {
+                    return Ok(HOST_ERROR_INVALID_DATA);
+                }
+            };
+
+            Keyspace::NamedKey(key_name)
+        }
+        KeyspaceTag::AllNamedKeys => Keyspace::AllNamedKeys,
+    };
+
+    let global_state_key = match keyspace_to_global_state_key(caller.context(), keyspace) {
+        Some(global_state_key) => global_state_key,
+        None => {
+            // Unknown keyspace received, return error
+            return Ok(HOST_ERROR_NOT_FOUND);
+        }
+    };
+
+    let global_state_read_result = caller.context_mut().tracking_copy.read(&global_state_key);
+    match global_state_read_result {
+        Ok(Some(StoredValue::AddressableEntity(_))) => return Ok(HOST_ERROR_INVALID_INPUT),
+        Ok(Some(_)) => {
+            // If it's a named key pointing to a URef, prune both the named key and the URef.
+            if let Keyspace::NamedKey(_) = keyspace {
+                if let Ok(Some(StoredValue::NamedKey(named_key_value))) =
+                    caller.context_mut().tracking_copy.read(&global_state_key)
+                {
+                    if let Ok(Key::URef(uref)) = named_key_value.get_key() {
+                        caller.context_mut().tracking_copy.prune(Key::URef(uref));
+                    }
+                }
+            }
+
+            // Produce a prune transform for the named key
+            caller.context_mut().tracking_copy.prune(global_state_key);
+        }
+        Ok(None) => {
+            // Entry does not exist, and we can't proceed with the prune operation
+            return Ok(HOST_ERROR_NOT_FOUND);
+        }
+        Err(error) => {
+            debug!(
+                ?error,
+                ?global_state_key,
+                "Error while attempting a read before removing value; aborting"
+            );
+            return Err(VMError::Fatal(FatalHostError::TrackingCopy));
+        }
+    }
+
+    Ok(HOST_ERROR_SUCCESS)
+}
+
+pub(crate) fn host_env_balance<S: GlobalStateReader + 'static>(
+    caller: &mut impl Caller<Context = Context<S>>,
+    input: Bytes,
+) -> VMResult<(Option<Bytes>, u32)> {
+    let (entity_kind, entity_addr) =
+        match bytesrepr::deserialize_from_slice::<&Bytes, (u32, [u8; 32])>(&input) {
+            Ok(res) => res,
+            Err(_) => {
+                return Ok((None, HOST_ERROR_INVALID_INPUT));
+            }
+        };
+
+    let entity_key = match EntityKindTag::from_u32(entity_kind) {
+        Some(EntityKindTag::Account) => {
+            let account_hash: AccountHash = AccountHash::new(entity_addr);
+
+            let account_key = Key::Account(account_hash);
+            match caller.context_mut().tracking_copy.read(&account_key) {
+                Ok(Some(StoredValue::CLValue(clvalue))) => {
+                    let addressable_entity_key = clvalue
+                        .into_t::<Key>()
+                        .map_err(|_| FatalHostError::TypeConversion)?;
+                    Either::Right(addressable_entity_key)
+                }
+                Ok(Some(StoredValue::Account(account))) => Either::Left(account.main_purse()),
+                Ok(Some(other_entity)) => {
+                    error!("Unexpected entity type: {other_entity:?}");
+                    return Err(FatalHostError::UnexpectedEntityKind.into());
+                }
+                Ok(None) => return Ok((None, HOST_ERROR_SUCCESS)),
+                Err(error) => {
+                    error!("Error while reading from storage; aborting key={account_key:?} error={error:?}");
+                    return Err(FatalHostError::TrackingCopy.into());
+                }
+            }
+        }
+        Some(EntityKindTag::Contract) => {
+            let hash_bytes = entity_addr;
+            let smart_contract_key = if caller.context().tracking_copy.addressable_entity_enabled()
+            {
+                Key::Package(hash_bytes)
+            } else {
+                Key::Hash(hash_bytes)
+            };
+            match caller.context_mut().tracking_copy.read(&smart_contract_key) {
+                Ok(Some(StoredValue::SmartContract(smart_contract_package))) => {
+                    match smart_contract_package.versions().latest() {
+                        Some(addressable_entity_hash) => {
+                            let key = Key::AddressableEntity(EntityAddr::SmartContract(
+                                addressable_entity_hash.value(),
+                            ));
+                            Either::Right(key)
+                        }
+                        None => {
+                            warn!(
+                                ?smart_contract_key,
+                                "Unable to find latest addressable entity hash for contract"
+                            );
+                            return Ok((None, HOST_ERROR_SUCCESS));
+                        }
+                    }
+                }
+                Ok(Some(StoredValue::ContractPackage(contract))) => {
+                    match contract.versions().last_key_value() {
+                        Some((_, contract_hash)) => Either::Right(Key::Hash(contract_hash.value())),
+                        None => {
+                            warn!(
+                                ?smart_contract_key,
+                                "Unable to find latest addressable entity hash for contract"
+                            );
+                            return Ok((None, HOST_ERROR_NOT_FOUND));
+                        }
+                    }
+                }
+                Ok(Some(_)) => {
+                    return Ok((None, HOST_ERROR_SUCCESS));
+                }
+                Ok(None) => {
+                    // Not found, balance is 0
+                    return Ok((None, HOST_ERROR_SUCCESS));
+                }
+                Err(error) => {
+                    error!(
+                        hash_bytes = base16::encode_lower(&hash_bytes),
+                        ?error,
+                        "Error while reading from storage; aborting"
+                    );
+                    panic!("Error while reading from storage")
+                }
+            }
+        }
+        None => return Ok((None, HOST_ERROR_SUCCESS)),
+    };
+
+    let purse = match entity_key {
+        Either::Left(main_purse) => main_purse,
+        Either::Right(indirect_entity_key) => {
+            match caller
+                .context_mut()
+                .tracking_copy
+                .read(&indirect_entity_key)
+            {
+                Ok(Some(StoredValue::AddressableEntity(addressable_entity))) => {
+                    addressable_entity.main_purse()
+                }
+                Ok(Some(StoredValue::Contract(contract))) => {
+                    match contract.named_keys().get(NAME_FOR_V2_CONTRACT_MAIN_PURSE) {
+                        Some(Key::URef(uref)) => *uref,
+                        None | Some(_) => {
+                            // Not found, balance is 0
+                            return Ok((None, HOST_ERROR_SUCCESS));
+                        }
+                    }
+                }
+                Ok(Some(other_entity)) => {
+                    panic!("Unexpected entity type: {other_entity:?}")
+                }
+                Ok(None) => panic!("Key not found while checking balance"), //return Ok(0),
+                Err(error) => {
+                    panic!("Error while reading from storage; aborting key={entity_key:?} error={error:?}")
+                }
+            }
+        }
+    };
+
+    let total_balance = caller
+        .context_mut()
+        .tracking_copy
+        .get_total_balance(Key::URef(purse))
+        .map_err(|_| FatalHostError::TotalBalanceReadFailure)?;
+
+    let total_balance: u64 = total_balance
+        .value()
+        .try_into()
+        .map_err(|_| FatalHostError::TotalBalanceOverflow)?;
+
+    Ok((
+        Some(Bytes::from(total_balance.to_le_bytes().to_vec())),
+        HOST_ERROR_NOT_FOUND,
+    ))
+}
+
+pub(crate) fn host_env_info<S: GlobalStateReader + 'static>(
+    caller: &mut impl Caller<Context = Context<S>>,
+) -> VMResult<(Option<Bytes>, u32)> {
+    let (caller_kind, caller_addr) = match &caller.context().caller {
+        Key::Account(account_hash) => (EntityKindTag::Account as u32, account_hash.value()),
+        Key::Package(smart_contract_addr) => (EntityKindTag::Contract as u32, *smart_contract_addr),
+        Key::Hash(hash_addr) => (EntityKindTag::Contract as u32, *hash_addr),
+        other => panic!("Unexpected caller: {other:?}"),
+    };
+
+    let (callee_kind, callee_addr) = match &caller.context().callee {
+        Key::Account(initiator_addr) => (EntityKindTag::Account as u32, initiator_addr.value()),
+        Key::Package(smart_contract_addr) => (EntityKindTag::Contract as u32, *smart_contract_addr),
+        Key::Hash(hash_addr) => (EntityKindTag::Contract as u32, *hash_addr),
+        other => panic!("Unexpected callee: {other:?}"),
+    };
+
+    let transferred_value = caller.context().transferred_value;
+
+    let block_time = caller.context().block_time.value();
+    let protocol_version = caller
+        .context()
+        .runtime_native_config
+        .protocol_version()
+        .value();
+    let parent_block_hash = caller.context().parent_block_hash;
+    let block_height = caller.context().block_height;
+    // `EnvInfo` in little-endian representation.
+    let env_info = EnvInfo {
+        caller_addr,
+        caller_kind,
+        callee_addr,
+        callee_kind: callee_kind.to_le(),
+        transferred_value: transferred_value.to_le(),
+        block_time: block_time.to_le(),
+        protocol_version_major: protocol_version.major.to_le(),
+        protocol_version_minor: protocol_version.minor.to_le(),
+        protocol_version_patch: protocol_version.patch.to_le(),
+        parent_block_hash,
+        block_height,
+    };
+
+    let env_info_bytes = borsh::to_vec(&env_info).map_err(|_| FatalHostError::Serialization)?;
+    Ok((Some(Bytes::from(env_info_bytes)), HOST_ERROR_SUCCESS))
+}
+
+pub(crate) fn host_create<S: GlobalStateReader + 'static>(
+    caller: &mut impl Caller<Context = Context<S>>,
+    input: Bytes,
+) -> VMResult<(Option<Bytes>, u32)> {
+    let (
+        transferred_value,
+        maybe_inputed_bytecode,
+        maybe_seed,
+        maybe_constructor_name,
+        constructor_data,
+    ) = match bytesrepr::deserialize_from_slice::<
+        &Bytes,
+        (
+            u64,
+            Option<Vec<u8>>,
+            Option<[u8; 32]>,
+            Option<String>,
+            Option<Vec<u8>>,
+        ),
+    >(&input)
+    {
+        Ok(res) => res,
+        Err(_) => {
+            return Ok((None, HOST_ERROR_INVALID_INPUT));
+        }
+    };
+
+    let bytecode = if let Some(bytecode) = maybe_inputed_bytecode {
+        bytecode.into()
+    } else {
+        caller.bytecode()
+    };
+
+    let bytecode_hash = chain_utils::compute_wasm_bytecode_hash(&bytecode);
+
+    let bytecode = ByteCode::new(ByteCodeKind::V2CasperWasm, bytecode.clone().into());
+    let bytecode_addr = ByteCodeAddr::V2CasperWasm(bytecode_hash);
+
+    let callee_addr = context_to_entity_addr(caller.context()).value();
+
+    let package_addr: HashAddr = chain_utils::compute_predictable_address(
+        caller.context().chain_name.as_bytes(),
+        callee_addr,
+        bytecode_hash,
+        maybe_seed,
+    );
+
+    let protocol_version = ProtocolVersion::V2_0_0;
+    let protocol_version_major = protocol_version.value().major;
+
+    let ae_enabled = caller.context().tracking_copy.addressable_entity_enabled();
+
+    let (smart_contract_package_key, smart_contract_package_as_stored_value, smart_contract_addr) =
+        if ae_enabled {
+            // 1. Store package hash
+            let mut smart_contract_package = Package::default();
+
+            let next_version =
+                smart_contract_package.next_entity_version_for(protocol_version_major);
+            let smart_contract_addr =
+                compute_next_contract_hash_version(package_addr, next_version);
+
+            smart_contract_package.insert_entity_version(
+                protocol_version_major,
+                EntityAddr::SmartContract(smart_contract_addr),
+            );
+
+            (
+                Key::Package(package_addr),
+                StoredValue::SmartContract(smart_contract_package),
+                smart_contract_addr,
+            )
+        } else {
+            let mut smart_contract_package = ContractPackage::default();
+
+            let next_version =
+                smart_contract_package.next_contract_version_for(protocol_version_major);
+            let smart_contract_addr =
+                compute_next_contract_hash_version(package_addr, next_version);
+
+            smart_contract_package.insert_contract_version(
+                protocol_version_major,
+                ContractHash::new(smart_contract_addr),
+            );
+
+            (
+                Key::Hash(package_addr),
+                StoredValue::ContractPackage(smart_contract_package),
+                smart_contract_addr,
+            )
+        };
+
+    if caller
+        .context_mut()
+        .tracking_copy
+        .read(&smart_contract_package_key)
+        .map_err(|_| VMError::Fatal(FatalHostError::TrackingCopy))?
+        .is_some()
+    {
+        return Err(VMError::Fatal(FatalHostError::ContractAlreadyExists));
+    }
+
+    metered_write(
+        caller,
+        smart_contract_package_key,
+        smart_contract_package_as_stored_value,
+    )?;
+
+    // 2. Store wasm
+    if !ae_enabled {
+        let byte_code_key = Key::byte_code_key(ByteCodeAddr::V2CasperWasm(bytecode_hash));
+        let byte_code_key_as_cl_value = match CLValue::from_t(byte_code_key) {
+            Ok(cl_value) => cl_value,
+            Err(_) => return Ok((None, HOST_ERROR_CL_VALUE)),
+        };
+
+        metered_write(
+            caller,
+            Key::Hash(bytecode_hash),
+            StoredValue::CLValue(byte_code_key_as_cl_value),
+        )?
+    };
+
+    metered_write(
+        caller,
+        Key::ByteCode(bytecode_addr),
+        StoredValue::ByteCode(bytecode),
+    )?;
+
+    // TODO: abort(str) as an alternative to trap
+    let address_generator = Arc::clone(&caller.context().address_generator);
+    let transaction_hash = caller.context().transaction_hash;
+    let runtime_native_config = caller.context().runtime_native_config.clone();
+    let main_purse: URef = match system::create_purse(
+        &mut caller.context_mut().tracking_copy,
+        runtime_native_config,
+        transaction_hash,
+        address_generator,
+    ) {
+        Ok(uref) => uref,
+        Err(mint_error) => {
+            error!(?mint_error, "Failed to create a purse");
+            return Ok((None, CALLEE_TRAPPED));
+        }
+    };
+
+    if ae_enabled {
+        // 3. Store addressable entity
+        let entity_addr = EntityAddr::SmartContract(smart_contract_addr);
+        let addressable_entity_key = Key::AddressableEntity(entity_addr);
+
+        let addressable_entity = AddressableEntity::new(
+            PackageHash::new(package_addr),
+            ByteCodeHash::new(bytecode_hash),
+            ProtocolVersion::V2_0_0,
+            main_purse,
+            AssociatedKeys::default(),
+            ActionThresholds::default(),
+            EntityKind::SmartContract(ContractRuntimeTag::VmCasperV2),
+        );
+
+        metered_write(
+            caller,
+            addressable_entity_key,
+            StoredValue::AddressableEntity(addressable_entity),
+        )?;
+    } else {
+        let contract_package_hash = ContractPackageHash::new(package_addr);
+        let contract_wasm_hash = ContractWasmHash::new(bytecode_hash);
+
+        let named_keys = {
+            let mut ret = NamedKeys::default();
+            ret.insert(
+                NAME_FOR_V2_CONTRACT_MAIN_PURSE.to_string(),
+                Key::URef(main_purse),
+            );
+            ret
+        };
+
+        let contract = Contract::new(
+            contract_package_hash,
+            contract_wasm_hash,
+            // TODO: Populate this correctly
+            named_keys,
+            EntryPoints::default(),
+            ProtocolVersion::V2_0_0,
+        );
+
+        metered_write(
+            caller,
+            Key::Hash(smart_contract_addr),
+            StoredValue::Contract(contract),
+        )?;
+    }
+
+    let _initial_state = match maybe_constructor_name {
+        Some(entry_point_name) => {
+            // Limit the new VM to remaining gas.
+            let gas_limit = caller
+                .get_remaining_points()?
+                .try_into_remaining()
+                .map_err(|_| FatalHostError::TypeConversion)?;
+
+            let execute_request = ExecuteRequestBuilder::default()
+                .with_initiator(caller.context().initiator)
+                .with_caller_key(caller.context().callee)
+                .with_gas_limit(gas_limit)
+                .with_execution_kind(ExecutionKind::Stored {
+                    address: package_addr,
+                    entry_point: entry_point_name.clone(),
+                })
+                .with_input(constructor_data.unwrap_or_default().into())
+                .with_transferred_value(transferred_value)
+                .with_transaction_hash(caller.context().transaction_hash)
+                // We're using shared address generator there as we need to preserve and advance the
+                // state of deterministic address generator across chain of calls.
+                .with_shared_address_generator(Arc::clone(&caller.context().address_generator))
+                .with_chain_name(caller.context().chain_name.clone())
+                .with_block_time(caller.context().block_time)
+                .with_state_hash(Digest::from_raw([0; 32]))
+                .with_block_height(1)
+                .with_parent_block_hash(BlockHash::new(Digest::from_raw([0; 32])))
+                .with_runtime_native_config(caller.context().runtime_native_config.clone())
+                .with_authorization_keys(caller.context().authorization_keys.clone())
+                .build()
+                .map_err(FatalHostError::ExecuteRequestBuildFailure)?;
+
+            let tracking_copy_for_ctor = caller.context().tracking_copy.fork2();
+
+            match caller
+                .executor()
+                .execute(tracking_copy_for_ctor, execute_request)
+            {
+                Ok(ExecuteResult {
+                    host_error,
+                    output,
+                    gas_usage,
+                    effects,
+                    cache,
+                    messages,
+                }) => {
+                    // output
+                    caller.consume_gas(gas_usage.gas_spent())?;
+
+                    if let Some(host_error) = host_error {
+                        return Ok((None, host_error.into_u32()));
+                    }
+
+                    caller
+                        .context_mut()
+                        .tracking_copy
+                        .apply_changes(effects, cache, messages);
+
+                    output
+                }
+                Err(execute_error) => {
+                    // This is a bug in the EE, as it should have been caught during the preparation
+                    // phase when the contract was stored in the global state.
+                    error!(?execute_error, "Failed to execute constructor entry point");
+                    return Err(VMError::Execute(execute_error));
+                }
+            }
+        }
+        None => None,
+    };
+
+    let create_result = CreateResult { package_addr };
+
+    let create_result_bytes =
+        borsh::to_vec(&create_result).map_err(|_| FatalHostError::Serialization)?;
+
+    Ok((Some(create_result_bytes.into()), CALLEE_SUCCEEDED))
 }
 
 fn keyspace_to_global_state_key<S: GlobalStateReader>(
