@@ -16,9 +16,7 @@ use casper_executor_wasm_interface::{
     u32_from_host_result, Caller, FatalHostError, VMError, VMResult,
 };
 use casper_storage::global_state::GlobalStateReader;
-use casper_types::{
-    bytesrepr::ToBytes, BlockHash, Digest, EntityAddr, HostFFIFunctionCost, Key, StoredValue,
-};
+use casper_types::{bytesrepr::ToBytes, BlockHash, Digest, EntityAddr, Key, StoredValue};
 use num_derive::FromPrimitive;
 use tracing::error;
 
@@ -81,24 +79,6 @@ fn charge_gas_storage<S: GlobalStateReader>(
     Ok(())
 }
 
-/// Consumes a set amount of gas for the specified host function and weights
-fn charge_host_function_call<S, const N: usize>(
-    caller: &mut impl Caller<Context = Context<S>>,
-    host_function: &HostFFIFunctionCost,
-    size_bytes: usize,
-) -> VMResult<()>
-where
-    S: GlobalStateReader,
-{
-    let Some(cost) = host_function.calculate_gas_cost(size_bytes as u64) else {
-        // Overflowing gas calculation means gas limit was exceeded
-        return Err(VMError::OutOfGas);
-    };
-
-    caller.consume_gas(cost.value().as_u64())?;
-    Ok(())
-}
-
 /// Writes a message to the global state and charges for storage used.
 fn metered_write<S: GlobalStateReader>(
     caller: &mut impl Caller<Context = Context<S>>,
@@ -126,8 +106,26 @@ fn context_to_entity_addr<S: GlobalStateReader>(context: &Context<S>) -> EntityA
     }
 }
 
-/// Returns from the execution of a smart contract with an optional flags.
-
+/// Single ffi function that exposes functionality of the host to wasm clients.
+///
+/// # Arguments
+/// - `ffi_opt`: number which will be interpreted as [FFIMenu]
+/// - `input_ptr`: pointer in the wasm execution memory space to the input data.
+/// - `input_len`: number of bytes to pass
+/// - `cb_alloc`: pointer to function in the wasm code which should be used to allocate in-wasm
+///   memory for output data.
+/// - `cb_ctx`: If the wasm a-priori knows what will be the size of the output data it can
+///   pre-allocate and pass the pointer in this variable. In this case we won't call function under
+///   `cb_alloc` to allocate the memory. This can be a cheaper (less gas consuming) option if the
+///   wasm creator knows what the memory outpu is.
+///
+/// # Output:
+/// - The return value is either:
+///     - Ok(0): The function call was successfull
+///     - Ok(err_code): The function call itself was successfull, but there was an error with the
+///       input data for the specific host functionality defined by `ffi_opt`
+///     - Err(vm_err): There was an error with executing the vm call
+#[allow(clippy::too_many_arguments)]
 pub fn casper_ffi<S: GlobalStateReader + 'static>(
     mut caller: impl Caller<Context = Context<S>>,
     ffi_opt: u32,
@@ -166,7 +164,12 @@ pub fn casper_ffi<S: GlobalStateReader + 'static>(
     // the following can produce a VMError::OutOfGas error
     charge_gas(&mut caller, cost)?;
 
-    let input_data: Bytes = caller.memory_read(input_ptr, input_len as _)?.into();
+    let input_data = if input_ptr == 0 {
+        // If the user didn't pass a input data pointer default to empty data
+        Bytes::default()
+    } else {
+        caller.memory_read(input_ptr, input_len as _)?.into()
+    };
 
     let (output_bytes, exit_code) = match option {
         FFIMenu::Mint(mint_method) => {
@@ -228,7 +231,7 @@ pub fn casper_ffi<S: GlobalStateReader + 'static>(
         let out_ptr: u32 = if cb_alloc != 0 {
             caller.alloc(cb_alloc, output.len(), cb_ctx)?
         } else {
-            // treats alloc_ctx as data
+            // treats cb_ctx as data
             cb_ctx
         };
         if out_ptr != 0 {

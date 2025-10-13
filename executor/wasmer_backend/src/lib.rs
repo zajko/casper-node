@@ -507,14 +507,14 @@ where
 
         // NOTE: There must be a better way than re-creating the object based on consumed fields.
 
+        let ffi_call_costs: BTreeMap<u32, HostFFIFunctionCost>,
+
         Context {
             initiator: data.context.initiator,
             caller: data.context.caller,
             callee: data.context.callee,
             config: data.context.config,
             storage_costs: data.context.storage_costs,
-            mint_costs: data.context.mint_costs,
-            auction_costs: data.context.auction_costs,
             baseline_motes_amount: data.context.baseline_motes_amount,
             transferred_value: data.context.transferred_value,
             tracking_copy: data.context.tracking_copy.fork2(),

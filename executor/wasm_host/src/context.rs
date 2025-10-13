@@ -48,5 +48,6 @@ pub struct Context<S: GlobalStateReader> {
     pub runtime_native_config: RuntimeNativeConfig,
     /// Authorization keys for this execution.
     pub authorization_keys: BTreeSet<AccountHash>,
-    pub ffi_call_costs: Arc<BTreeMap<u32, HostFFIFunctionCost>>,
+    /// Map of ffi menu options to their respective cost entries
+    pub ffi_call_costs: BTreeMap<u32, HostFFIFunctionCost>,
 }

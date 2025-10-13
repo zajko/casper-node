@@ -15,7 +15,7 @@ use keccak_asm::Digest as KeccakDigest;
 use num_traits::FromPrimitive;
 use sha2::{
     digest::{Update, VariableOutput},
-    Digest, Sha256,
+    Sha256,
 };
 use thiserror::Error as ThisError;
 use tracing::debug;
