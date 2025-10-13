@@ -507,8 +507,6 @@ where
 
         // NOTE: There must be a better way than re-creating the object based on consumed fields.
 
-        let ffi_call_costs: BTreeMap<u32, HostFFIFunctionCost>,
-
         Context {
             initiator: data.context.initiator,
             caller: data.context.caller,
@@ -529,6 +527,7 @@ where
             parent_block_hash: data.context.parent_block_hash,
             block_height: data.context.block_height,
             authorization_keys: data.context.authorization_keys.clone(),
+            ffi_call_costs: data.context.ffi_call_costs.clone(),
         }
     }
 }

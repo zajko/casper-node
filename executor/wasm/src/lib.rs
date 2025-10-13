@@ -53,9 +53,10 @@ use casper_types::{
     AddressableEntity, AuctionCosts, ByteCode, ByteCodeAddr, ByteCodeHash, ByteCodeKind, CLType,
     CLValue, Contract, ContractRuntimeTag, ContractWasmHash, Digest, EntityAddr, EntityKind,
     EntryPointAccess, EntryPointAddr, EntryPointPayment, EntryPointType, EntryPointValue, Gas,
-    Groups, InitiatorAddr, Key, MessageLimits, MintCosts, NamedKeys, Package, PackageAddr,
-    PackageStatus, Parameters, Phase, ProtocolVersion, StorageCosts, StoredValue, TransactionHash,
-    TransactionInvocationTarget, URef, WasmV2Config, NAME_FOR_V2_CONTRACT_MAIN_PURSE,
+    Groups, HostFFIFunctionCost, InitiatorAddr, Key, MessageLimits, MintCosts, NamedKeys, Package,
+    PackageAddr, PackageStatus, Parameters, Phase, ProtocolVersion, StorageCosts, StoredValue,
+    TransactionHash, TransactionInvocationTarget, URef, WasmV2Config,
+    NAME_FOR_V2_CONTRACT_MAIN_PURSE,
 };
 use install::{InstallContractError, InstallContractRequest, InstallContractResult};
 use parking_lot::RwLock;
@@ -927,13 +928,11 @@ impl ExecutorV2 {
                 return Err(ExecuteError::Fatal(FatalHostError::DispatchSystemContract));
             }
         };
-
+        let ffi_call_costs = build_ffi_call_costs(&self.config);
         let context = Context {
             initiator,
             config: self.config.wasm_config,
             storage_costs: self.config.storage_costs,
-            mint_costs: self.config.mint_costs,
-            auction_costs: self.config.auction_costs,
             baseline_motes_amount: self.config.baseline_motes_amount,
             caller: caller_key,
             callee: callee_key,
@@ -950,6 +949,7 @@ impl ExecutorV2 {
             parent_block_hash: parent_block_hash.inner().value(),
             block_height,
             authorization_keys,
+            ffi_call_costs,
         };
 
         // Check that the input argument size does not exceed the VM memory limit
@@ -1091,6 +1091,92 @@ impl ExecutorV2 {
                 Err(ExecuteError::Fatal(internal_error))
             }
         }
+    }
+
+    fn build_ffi_call_costs(&self, config: &ExecutorConfig) -> BTreeMap<u32, HostFFIFunctionCost> {
+        FFIMenu::all_ffi_options()
+            .iter()
+            .map(|ffi_opt| {
+                let ffi_function_cost = match ffi_opt {
+                    FFIMenu::Mint(mint_methods) => {
+                        let base_cost = match mint_methods {
+                            MintMethods::Burn => HostFFIFunctionCost::fixed(config.mint_costs.burn),
+                            MintMethods::Transfer => {
+                                HostFFIFunctionCost::fixed(config.mint_costs.transfer)
+                            }
+                            MintMethods::TransferPurse => {
+                                HostFFIFunctionCost::fixed(config.mint_costs.transfer)
+                            }
+                        };
+                        HostFFIFunctionCost::fixed(base_cost)
+                    }
+                    FFIMenu::Auction(auction_methods) => {
+                        let base_cost = match auction_methods {
+                            AuctionMethods::Activate => config.auction_costs.activate_bid,
+                            AuctionMethods::Bid => config.auction_costs.auction_bid,
+                            AuctionMethods::Withdraw => config.auction_costs.withdraw_bid,
+                            AuctionMethods::Delegate => config.auction_costs.delegate,
+                            AuctionMethods::Undelegate => config.auction_costs.undelegate,
+                            AuctionMethods::Redelegate => config.auction_costs.redelegate,
+                            AuctionMethods::AddReservation => config.auction_costs.add_reservations,
+                            AuctionMethods::CancelReservation => {
+                                config.auction_costs.cancel_reservations
+                            }
+                            AuctionMethods::ChangePublicKey => {
+                                config.auction_costs.change_bid_public_key
+                            }
+                        };
+                        HostFFIFunctionCost::fixed(base_cost)
+                    }
+                    FFIMenu::Crypto(crypto_methods) => match crypto_methods {
+                        CryptoMethods::AltBn128Add => {
+                            config.wasm_config.host_ffi_opt_costs().alt_bn128_add
+                        }
+                        CryptoMethods::AltBn128Multiply => {
+                            config.wasm_config.host_ffi_opt_costs().alt_bn128_mul
+                        }
+                        CryptoMethods::AltBn128Pairing => {
+                            config.wasm_config.host_ffi_opt_costs().alt_bn128_pairing
+                        }
+                        CryptoMethods::GenericHash => {
+                            config.wasm_config.host_ffi_opt_costs().generic_hash
+                        }
+                        CryptoMethods::RecoverSecp256K1 => {
+                            config.wasm_config.host_ffi_opt_costs().recover_secp256k1
+                        }
+                    },
+                    FFIMenu::Emit(emit_methods) => match emit_methods {
+                        EmitMethods::PrintStd => config.wasm_config.host_ffi_opt_costs().print,
+                        EmitMethods::Native => config.wasm_config.host_ffi_opt_costs().emit,
+                    },
+                    FFIMenu::GlobalState(global_state_methods) => match global_state_methods {
+                        GlobalStateMethods::Read => config.wasm_config.host_ffi_opt_costs().read,
+                        GlobalStateMethods::Write => config.wasm_config.host_ffi_opt_costs().write,
+                        GlobalStateMethods::Remove => {
+                            config.wasm_config.host_ffi_opt_costs().remove
+                        }
+                        GlobalStateMethods::GetBalance => {
+                            config.wasm_config.host_ffi_opt_costs().env_balance
+                        }
+                        GlobalStateMethods::GetInfo => {
+                            config.wasm_config.host_ffi_opt_costs().env_info
+                        }
+                        GlobalStateMethods::Create => {
+                            config.wasm_config.host_ffi_opt_costs().create
+                        }
+                    },
+                    FFIMenu::Control(control_methods) => match control_methods {
+                        ControlMethods::Call => config.wasm_config.host_ffi_opt_costs().call,
+                        ControlMethods::Upgrade => config.wasm_config.host_ffi_opt_costs().upgrade,
+                    },
+                    FFIMenu::IO(iomethods) => match iomethods {
+                        IOMethods::Return => config.wasm_config.host_ffi_opt_costs().ret,
+                        IOMethods::CopyInput => config.wasm_config.host_ffi_opt_costs().copy_input,
+                    },
+                };
+                (ffi_opt.into(), ffi_function_cost)
+            })
+            .collect()
     }
     #[allow(clippy::too_many_arguments)]
     fn execute_vm1_wasm_byte_code<R>(

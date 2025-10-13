@@ -11,6 +11,8 @@ use casper_types::{
     account::AccountHash, contract_messages::Messages, execution::Effects, BlockHash, BlockTime,
     Digest, HashAddr, Key, TransactionHash,
 };
+use num_derive::FromPrimitive;
+use num_traits::FromPrimitive;
 use parking_lot::RwLock;
 use thiserror::Error;
 
@@ -18,6 +20,8 @@ use crate::{
     CallError, FatalHostError, GasUsage, SandboxedExecutionRequest, SandboxedExecutionResult,
     WasmPreparationError,
 };
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 
 /// Request to execute a Wasm contract.
 #[derive(Debug)]
@@ -504,94 +508,26 @@ impl FFIMenu {
             },
         }
     }
+
+    pub fn all_ffi_options() -> impl Iterator<Item = FFIMenu> {
+        FFIPrimitiveValue::iter().map(|raw| FFIMenu::from(&raw))
+    }
 }
 
 impl TryFrom<u32> for FFIMenu {
     type Error = ();
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(FFIMenu::Mint(MintMethods::Transfer)),
-            1 => Ok(FFIMenu::Mint(MintMethods::TransferPurse)),
-            2 => Ok(FFIMenu::Mint(MintMethods::Burn)),
-            100 => Ok(FFIMenu::Auction(AuctionMethods::Activate)),
-            101 => Ok(FFIMenu::Auction(AuctionMethods::Bid)),
-            102 => Ok(FFIMenu::Auction(AuctionMethods::Withdraw)),
-            103 => Ok(FFIMenu::Auction(AuctionMethods::Delegate)),
-            104 => Ok(FFIMenu::Auction(AuctionMethods::Undelegate)),
-            105 => Ok(FFIMenu::Auction(AuctionMethods::Redelegate)),
-            106 => Ok(FFIMenu::Auction(AuctionMethods::AddReservation)),
-            107 => Ok(FFIMenu::Auction(AuctionMethods::CancelReservation)),
-            108 => Ok(FFIMenu::Auction(AuctionMethods::ChangePublicKey)),
-            200 => Ok(FFIMenu::Crypto(CryptoMethods::AltBn128Add)),
-            201 => Ok(FFIMenu::Crypto(CryptoMethods::AltBn128Multiply)),
-            202 => Ok(FFIMenu::Crypto(CryptoMethods::AltBn128Pairing)),
-            203 => Ok(FFIMenu::Crypto(CryptoMethods::GenericHash)),
-            204 => Ok(FFIMenu::Crypto(CryptoMethods::RecoverSecp256K1)),
-            300 => Ok(FFIMenu::Emit(EmitMethods::PrintStd)),
-            301 => Ok(FFIMenu::Emit(EmitMethods::Native)),
-            400 => Ok(FFIMenu::GlobalState(GlobalStateMethods::Read)),
-            401 => Ok(FFIMenu::GlobalState(GlobalStateMethods::Write)),
-            402 => Ok(FFIMenu::GlobalState(GlobalStateMethods::Remove)),
-            403 => Ok(FFIMenu::GlobalState(GlobalStateMethods::GetBalance)),
-            404 => Ok(FFIMenu::GlobalState(GlobalStateMethods::GetInfo)),
-            405 => Ok(FFIMenu::GlobalState(GlobalStateMethods::Create)),
-            500 => Ok(FFIMenu::Control(ControlMethods::Call)),
-            501 => Ok(FFIMenu::Control(ControlMethods::Upgrade)),
-            600 => Ok(FFIMenu::IO(IOMethods::Return)),
-            601 => Ok(FFIMenu::IO(IOMethods::CopyInput)),
-            _ => Err(()),
+        match FFIPrimitiveValue::from_u32(value) {
+            Some(primitive) => Ok((&primitive).into()),
+            None => Err(()),
         }
     }
 }
 
 impl From<FFIMenu> for u32 {
     fn from(value: FFIMenu) -> u32 {
-        match value {
-            FFIMenu::Mint(mint) => match mint {
-                MintMethods::Transfer => 0,
-                MintMethods::TransferPurse => 1,
-                MintMethods::Burn => 2,
-            },
-            FFIMenu::Auction(auction) => match auction {
-                AuctionMethods::Activate => 100,
-                AuctionMethods::Bid => 101,
-                AuctionMethods::Withdraw => 102,
-                AuctionMethods::Delegate => 103,
-                AuctionMethods::Undelegate => 104,
-                AuctionMethods::Redelegate => 105,
-                AuctionMethods::AddReservation => 106,
-                AuctionMethods::CancelReservation => 107,
-                AuctionMethods::ChangePublicKey => 108,
-            },
-            FFIMenu::Crypto(crypto) => match crypto {
-                CryptoMethods::AltBn128Add => 200,
-                CryptoMethods::AltBn128Multiply => 201,
-                CryptoMethods::AltBn128Pairing => 202,
-                CryptoMethods::GenericHash => 203,
-                CryptoMethods::RecoverSecp256K1 => 204,
-            },
-            FFIMenu::Emit(emit) => match emit {
-                EmitMethods::PrintStd => 300,
-                EmitMethods::Native => 301,
-            },
-            FFIMenu::GlobalState(global_state) => match global_state {
-                GlobalStateMethods::Read => 400,
-                GlobalStateMethods::Write => 401,
-                GlobalStateMethods::Remove => 402,
-                GlobalStateMethods::GetBalance => 403,
-                GlobalStateMethods::GetInfo => 404,
-                GlobalStateMethods::Create => 405,
-            },
-            FFIMenu::Control(control) => match control {
-                ControlMethods::Call => 500,
-                ControlMethods::Upgrade => 501,
-            },
-            FFIMenu::IO(io) => match io {
-                IOMethods::Return => 600,
-                IOMethods::CopyInput => 601,
-            },
-        }
+        FFIPrimitiveValue::from(&value) as u32
     }
 }
 
@@ -696,4 +632,145 @@ pub trait Executor: Clone + Send {
         runtime_native_config: RuntimeNativeConfig,
         request: SandboxedExecutionRequest,
     ) -> Result<SandboxedExecutionResult, ExecuteError>;
+}
+
+#[repr(u32)]
+#[derive(EnumIter, FromPrimitive)]
+enum FFIPrimitiveValue {
+    /* Mint values */
+    MintTransfer = 0,
+    MintTransferPurse = 1,
+    MintBurn = 2,
+    /* Auction values */
+    AuctionActivate = 100,
+    AuctionBid = 101,
+    AuctionWithdraw = 102,
+    AuctionDelegate = 103,
+    AuctionUndelegate = 104,
+    AuctionRedelegate = 105,
+    AuctionAddReservation = 106,
+    AuctionCancelReservation = 107,
+    AuctionChangePublicKey = 108,
+    /* Crypto values */
+    CryptoAltBn128Add = 200,
+    CryptoAltBn128Multiply = 201,
+    CryptoAltBn128Pairing = 202,
+    CryptoGenericHash = 203,
+    CryptoRecoverSecp256K1 = 204,
+    /*Emit values */
+    EmitPrintStd = 300,
+    EmitNative = 301,
+    /* Global state values */
+    GlobalStateRead = 400,
+    GlobalStateWrite = 401,
+    GlobalStateRemove = 402,
+    GlobalStateGetBalance = 403,
+    GlobalStateGetInfo = 404,
+    GlobalStateCreate = 405,
+    /* Control values */
+    ControlCall = 500,
+    ControlUpgrade = 501,
+    /* IO values */
+    IOReturn = 600,
+    IOCopyInput = 601,
+}
+
+impl From<&FFIPrimitiveValue> for FFIMenu {
+    fn from(value: &FFIPrimitiveValue) -> Self {
+        match value {
+            FFIPrimitiveValue::MintTransfer => Self::Mint(MintMethods::Transfer),
+            FFIPrimitiveValue::MintTransferPurse => Self::Mint(MintMethods::TransferPurse),
+            FFIPrimitiveValue::MintBurn => Self::Mint(MintMethods::Burn),
+            FFIPrimitiveValue::AuctionActivate => Self::Auction(AuctionMethods::Activate),
+            FFIPrimitiveValue::AuctionBid => Self::Auction(AuctionMethods::Bid),
+            FFIPrimitiveValue::AuctionWithdraw => Self::Auction(AuctionMethods::Withdraw),
+            FFIPrimitiveValue::AuctionDelegate => Self::Auction(AuctionMethods::Delegate),
+            FFIPrimitiveValue::AuctionUndelegate => Self::Auction(AuctionMethods::Undelegate),
+            FFIPrimitiveValue::AuctionRedelegate => Self::Auction(AuctionMethods::Redelegate),
+            FFIPrimitiveValue::AuctionAddReservation => {
+                Self::Auction(AuctionMethods::AddReservation)
+            }
+            FFIPrimitiveValue::AuctionCancelReservation => {
+                Self::Auction(AuctionMethods::CancelReservation)
+            }
+            FFIPrimitiveValue::AuctionChangePublicKey => {
+                Self::Auction(AuctionMethods::ChangePublicKey)
+            }
+            FFIPrimitiveValue::CryptoAltBn128Add => Self::Crypto(CryptoMethods::AltBn128Add),
+            FFIPrimitiveValue::CryptoAltBn128Multiply => {
+                Self::Crypto(CryptoMethods::AltBn128Multiply)
+            }
+            FFIPrimitiveValue::CryptoAltBn128Pairing => {
+                Self::Crypto(CryptoMethods::AltBn128Pairing)
+            }
+            FFIPrimitiveValue::CryptoGenericHash => Self::Crypto(CryptoMethods::GenericHash),
+            FFIPrimitiveValue::CryptoRecoverSecp256K1 => {
+                Self::Crypto(CryptoMethods::RecoverSecp256K1)
+            }
+            FFIPrimitiveValue::EmitPrintStd => Self::Emit(EmitMethods::PrintStd),
+            FFIPrimitiveValue::EmitNative => Self::Emit(EmitMethods::Native),
+            FFIPrimitiveValue::GlobalStateRead => Self::GlobalState(GlobalStateMethods::Read),
+            FFIPrimitiveValue::GlobalStateWrite => Self::GlobalState(GlobalStateMethods::Write),
+            FFIPrimitiveValue::GlobalStateRemove => Self::GlobalState(GlobalStateMethods::Remove),
+            FFIPrimitiveValue::GlobalStateGetBalance => {
+                Self::GlobalState(GlobalStateMethods::GetBalance)
+            }
+            FFIPrimitiveValue::GlobalStateGetInfo => Self::GlobalState(GlobalStateMethods::GetInfo),
+            FFIPrimitiveValue::GlobalStateCreate => Self::GlobalState(GlobalStateMethods::Create),
+            FFIPrimitiveValue::ControlCall => Self::Control(ControlMethods::Call),
+            FFIPrimitiveValue::ControlUpgrade => Self::Control(ControlMethods::Upgrade),
+            FFIPrimitiveValue::IOReturn => Self::IO(IOMethods::Return),
+            FFIPrimitiveValue::IOCopyInput => Self::IO(IOMethods::CopyInput),
+        }
+    }
+}
+
+impl From<&FFIMenu> for FFIPrimitiveValue {
+    fn from(value: &FFIMenu) -> Self {
+        match value {
+            FFIMenu::Mint(mint_methods) => match mint_methods {
+                MintMethods::Burn => Self::MintBurn,
+                MintMethods::Transfer => Self::MintTransfer,
+                MintMethods::TransferPurse => Self::MintTransferPurse,
+            },
+            FFIMenu::Auction(auction_methods) => match auction_methods {
+                AuctionMethods::Activate => Self::AuctionActivate,
+                AuctionMethods::Bid => Self::AuctionBid,
+                AuctionMethods::Withdraw => Self::AuctionWithdraw,
+                AuctionMethods::Delegate => Self::AuctionDelegate,
+                AuctionMethods::Undelegate => Self::AuctionUndelegate,
+                AuctionMethods::Redelegate => Self::AuctionRedelegate,
+                AuctionMethods::AddReservation => Self::AuctionAddReservation,
+                AuctionMethods::CancelReservation => Self::AuctionCancelReservation,
+                AuctionMethods::ChangePublicKey => Self::AuctionChangePublicKey,
+            },
+            FFIMenu::Crypto(crypto_methods) => match crypto_methods {
+                CryptoMethods::AltBn128Add => Self::CryptoAltBn128Add,
+                CryptoMethods::AltBn128Multiply => Self::CryptoAltBn128Multiply,
+                CryptoMethods::AltBn128Pairing => Self::CryptoAltBn128Pairing,
+                CryptoMethods::GenericHash => Self::CryptoGenericHash,
+                CryptoMethods::RecoverSecp256K1 => Self::CryptoRecoverSecp256K1,
+            },
+            FFIMenu::Emit(emit_methods) => match emit_methods {
+                EmitMethods::PrintStd => Self::EmitPrintStd,
+                EmitMethods::Native => Self::EmitNative,
+            },
+            FFIMenu::GlobalState(global_state_methods) => match global_state_methods {
+                GlobalStateMethods::Read => Self::GlobalStateRead,
+                GlobalStateMethods::Write => Self::GlobalStateWrite,
+                GlobalStateMethods::Remove => Self::GlobalStateRemove,
+                GlobalStateMethods::GetBalance => Self::GlobalStateGetBalance,
+                GlobalStateMethods::GetInfo => Self::GlobalStateGetInfo,
+                GlobalStateMethods::Create => Self::GlobalStateCreate,
+            },
+            FFIMenu::Control(control_methods) => match control_methods {
+                ControlMethods::Call => Self::ControlCall,
+                ControlMethods::Upgrade => Self::ControlUpgrade,
+            },
+            FFIMenu::IO(iomethods) => match iomethods {
+                IOMethods::Return => Self::IOReturn,
+                IOMethods::CopyInput => Self::IOCopyInput,
+            },
+        }
+    }
 }

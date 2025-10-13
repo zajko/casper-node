@@ -313,7 +313,7 @@ fn exec<S: GlobalStateReader + 'static>(
         return Err(VMError::Execute(ExecuteError::Api(api_error)));
     }
 
-    Ok((ret_output, u32_from_host_result(host_result)))
+    Ok((output, u32_from_host_result(host_result)))
 }
 
 pub fn casper_env_balance<S: GlobalStateReader>(

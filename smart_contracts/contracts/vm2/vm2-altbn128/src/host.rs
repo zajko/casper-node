@@ -3,7 +3,7 @@ use casper_contract_sdk::{
     casper::{
         self,
         altbn128::{self, AltBn128Error as Error, Fq, Fr, Pair, G1},
-        casper_system,
+        casper_ffi, casper_system,
     },
     casper_executor_wasm_common::flags::ReturnFlags,
     serializers::borsh::from_slice,

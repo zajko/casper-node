@@ -17,12 +17,15 @@ use crate::{
     },
     reserve_vec_space,
     serializers::borsh::{BorshDeserialize, BorshSerialize},
-    types::{Address, CallError, EmitFunctionOption, HashAlgorithm, PublicKey},
+    types::{
+        Address, CallError, EmitFunctionOption, GlobalStateFunctionOption, HashAlgorithm,
+        IOFunctionOption, PublicKey,
+    },
     Message, ToCallData,
 };
 
 use crate::types::{EntityAddr, SystemContractOption};
-use casper_contract_sdk_sys::{casper_env_info, EnvInfo};
+use casper_contract_sdk_sys::EnvInfo;
 use casper_executor_wasm_common::{
     error::{result_from_code, HostResult, HOST_ERROR_SUCCESS},
     flags::ReturnFlags,
@@ -53,59 +56,32 @@ extern "C" fn alloc_callback<F: FnOnce(usize) -> Option<ptr::NonNull<u8>>>(
     }
 }
 
-/// Provided callback should ensure that it can provide a pointer that can store `size` bytes.
-/// Function returns last pointer after writing data, or None otherwise.
-pub fn copy_input_into<F: FnOnce(usize) -> Option<ptr::NonNull<u8>>>(
-    alloc: Option<F>,
-) -> Option<NonNull<u8>> {
-    let ret = unsafe {
-        casper_contract_sdk_sys::casper_copy_input(
-            alloc_callback::<F>,
-            &alloc as *const _ as *mut c_void,
-        )
-    };
-    NonNull::<u8>::new(ret)
-}
-
 /// Copy input data into a vector.
 pub fn copy_input() -> Vec<u8> {
-    let mut vec = Vec::new();
-    let last_ptr = copy_input_into(Some(|size| reserve_vec_space(&mut vec, size)));
-    match last_ptr {
-        Some(_last_ptr) => vec,
-        None => {
-            // TODO: size of input was 0, we could properly deal with this case by not calling alloc
-            // cb if size==0
-            Vec::new()
-        }
+    let ret = {
+        let (output_data, res) = casper_ffi(IOFunctionOption::CopyInput.into(), &[]);
+        res.and_then(|()| {
+            let data = match output_data {
+                Some(data) => data,
+                None => return Err(CallError::OutputNotDeserializable),
+            };
+            Ok(data)
+        })
+    };
+
+    match ret {
+        Ok(data) => data,
+        Err(err) => panic!("Failed to copy input: {:?}", err),
     }
-}
-
-/// Provided callback should ensure that it can provide a pointer that can store `size` bytes.
-pub fn copy_input_to(dest: &mut [u8]) -> Option<&[u8]> {
-    let last_ptr = copy_input_into(Some(|size| {
-        if size > dest.len() {
-            None
-        } else {
-            // SAFETY: `dest` is guaranteed to be non-null and large enough to hold `size`
-            // bytes.
-            Some(unsafe { ptr::NonNull::new_unchecked(dest.as_mut_ptr()) })
-        }
-    }));
-
-    let end_ptr = last_ptr?;
-    let length = unsafe { end_ptr.as_ptr().offset_from(dest.as_mut_ptr()) };
-    let length: usize = length.try_into().unwrap();
-    Some(&dest[..length])
 }
 
 /// Return from the contract.
 pub fn ret(flags: ReturnFlags, data: Option<&[u8]>) {
-    let (data_ptr, data_len) = match data {
-        Some(data) => (data.as_ptr(), data.len()),
-        None => (ptr::null(), 0),
-    };
-    unsafe { casper_contract_sdk_sys::casper_return(flags.bits(), data_ptr, data_len) };
+    let args = (flags.bits(), data);
+    let arg_bytes = borsh::to_vec(&args).expect("Expected borsh to work");
+
+    let _ = casper_ffi(IOFunctionOption::Return.into(), &arg_bytes);
+    // Calling ret should stop the stack execution
     #[cfg(target_arch = "wasm32")]
     unreachable!()
 }
@@ -298,7 +274,6 @@ pub fn casper_ffi(ffi_opt: u32, input_data: &[u8]) -> (Option<Vec<u8>>, Result<(
             result
         }),
     );
-    log!("casper_system result_code {:?}", result_code);
     (output, result_code)
 }
 
@@ -443,12 +418,13 @@ pub fn call<T: ToCallData>(
 /// Get the environment info.
 pub fn get_env_info() -> EnvInfo {
     let ret = {
-        let mut info = MaybeUninit::<EnvInfo>::uninit();
-
-        let ret = unsafe { casper_env_info(info.as_mut_ptr().cast(), size_of::<EnvInfo>() as u32) };
-        result_from_code(ret).map(|()| {
-            // SAFETY: The size of `EnvInfo` is known and the pointer is valid.
-            unsafe { info.assume_init() }
+        let (output_data, res) = casper_ffi(GlobalStateFunctionOption::GetInfo.into(), &[]);
+        res.and_then(|()| {
+            let data = match output_data {
+                Some(data) => data,
+                None => return Err(CallError::OutputNotDeserializable),
+            };
+            borsh::from_slice(&data).map_err(|_| CallError::OutputNotDeserializable)
         })
     };
 

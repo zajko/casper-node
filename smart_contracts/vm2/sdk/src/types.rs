@@ -204,6 +204,7 @@ pub enum CallError {
     CalleeTrapped,
     CalleeGasDepleted,
     NotCallable,
+    OutputNotDeserializable,
 }
 
 impl fmt::Display for CallError {
@@ -213,6 +214,7 @@ impl fmt::Display for CallError {
             CallError::CalleeTrapped => write!(f, "callee trapped"),
             CallError::CalleeGasDepleted => write!(f, "callee gas depleted"),
             CallError::NotCallable => write!(f, "not callable"),
+            CallError::OutputNotDeserializable => write!(f, "output not deserializable"),
         }
     }
 }
