@@ -32,7 +32,7 @@ use casper_executor_wasm_interface::{
         InstallContractWithProviderResult, MetaError,
     },
     sandboxed_execution::{
-        SandboxedExecutionError, SandboxedExecutionRequest, SandboxedExecutionResult,
+        SandboxedExecutionError, SandboxedExecutionResult, SuccessfullResultOutput,
     },
     ConfigBuilder, FatalHostError, GasUsage, VMError, WasmInstance,
 };
@@ -44,7 +44,7 @@ use casper_storage::{
         GlobalStateReader,
     },
     tracking_copy::{TrackingCopyEntityExt, TrackingCopyExt},
-    AddressGenerator, RuntimeNativeConfig, TrackingCopy,
+    TrackingCopy,
 };
 use casper_types::{
     account::AccountHash,
@@ -433,6 +433,7 @@ impl ExecutorV2 {
                                     transaction_hash,
                                     gas_limit,
                                     authorization_keys.clone(),
+                                    sandboxed,
                                 );
                             }
                             EntityKind::SmartContract(ContractRuntimeTag::VmCasperV2) => {
@@ -651,6 +652,7 @@ impl ExecutorV2 {
                                     transaction_hash,
                                     gas_limit,
                                     authorization_keys,
+                                    sandboxed,
                                 );
                             }
                         }
@@ -997,6 +999,7 @@ impl ExecutorV2 {
         transaction_hash: TransactionHash,
         gas_limit: u64,
         authorization_keys: BTreeSet<AccountHash>,
+        sandboxed: bool,
     ) -> Result<ExecuteResult, ExecuteError>
     where
         R: GlobalStateReader + 'static,
@@ -1026,6 +1029,7 @@ impl ExecutorV2 {
                 args,
                 authorization_keys,
                 phase,
+                sandboxed,
             )
         };
 
@@ -1182,6 +1186,7 @@ impl ExecutorV2 {
             }
             Err(error) => return Err(error.into()),
         };
+        let sandboxed = install_request.sandboxed;
 
         let res = self.install_contract(tracking_copy, install_request);
         match res {
@@ -1191,16 +1196,28 @@ impl ExecutorV2 {
                 effects,
                 cache: _,
                 messages,
-            }) => match state_provider.commit_effects(state_root_hash, effects.clone()) {
-                Ok(post_state_hash) => Ok(InstallContractWithProviderResult {
-                    smart_contract_addr,
-                    gas_usage,
-                    effects,
-                    post_state_hash,
-                    messages,
-                }),
-                Err(error) => Err(InstallContractError::GlobalState(error)),
-            },
+            }) => {
+                if !sandboxed {
+                    match state_provider.commit_effects(state_root_hash, effects.clone()) {
+                        Ok(post_state_hash) => Ok(InstallContractWithProviderResult {
+                            smart_contract_addr,
+                            gas_usage,
+                            effects,
+                            post_state_hash,
+                            messages,
+                        }),
+                        Err(error) => Err(InstallContractError::GlobalState(error)),
+                    }
+                } else {
+                    Ok(InstallContractWithProviderResult {
+                        smart_contract_addr,
+                        gas_usage,
+                        effects,
+                        post_state_hash: state_root_hash,
+                        messages,
+                    })
+                }
+            }
             Err(error) => Err(error),
         }
     }
@@ -1225,38 +1242,25 @@ impl Executor for ExecutorV2 {
     fn execute_sandbox<R: GlobalStateReader + 'static>(
         &self,
         tracking_copy: TrackingCopy<R>,
-        runtime_native_config: RuntimeNativeConfig,
-        request: SandboxedExecutionRequest,
+        execute_request: ExecuteRequest,
     ) -> Result<SandboxedExecutionResult, ExecuteError> {
-        // Convert SandboxedExecutionRequest to ExecuteRequest with sandboxed mode enabled
-        let execute_request = ExecuteRequestBuilder::default()
-            .with_initiator(request.initiator)
-            .with_caller_key(Key::Account(request.initiator))
-            .with_gas_limit(request.gas_limit) // Use the provided gas limit for protection
-            .with_execution_kind(ExecutionKind::Stored {
-                address: request.contract_address,
-                entry_point: request.entry_point,
-            })
-            .with_input(Bytes::copy_from_slice(request.input.inner_bytes()))
-            .with_transferred_value(0) // Must be 0 for sandboxed queries
-            .with_transaction_hash(TransactionHash::from_raw([0; 32])) // Dummy hash for queries
-            .with_address_generator(AddressGenerator::new(&[0; 32], Phase::Session))
-            .with_chain_name(request.chain_name)
-            .with_block_time(request.block_time)
-            .with_state_hash(request.state_hash)
-            .with_parent_block_hash(request.parent_block_hash)
-            .with_block_height(request.block_height)
-            .with_sandboxed(true) // Enable sandboxed mode
-            .with_runtime_native_config(runtime_native_config)
-            .with_authorization_keys(BTreeSet::from_iter([request.initiator]))
-            .build()
-            .map_err(|error| {
-                ExecuteError::Fatal(FatalHostError::ExecuteRequestBuildFailure(error))
-            })?;
-
         // Execute the query in sandboxed mode
         let execute_result = self.execute_with_tracking_copy(tracking_copy, execute_request)?;
-        let output_bytes: Option<Vec<u8>> = execute_result.output.map(|x| x.into());
+        let output_bytes: Vec<u8> = execute_result.output.map(|x| x.into()).unwrap_or(vec![]);
+        let output = if execute_result.host_error.is_none() {
+            let limit = execute_result.gas_usage.gas_limit();
+            let consumed = execute_result.gas_usage.gas_spent();
+            Some(SuccessfullResultOutput {
+                transfers: vec![],
+                limit: Gas::new(limit),
+                consumed: Gas::new(consumed),
+                effects: execute_result.effects,
+                messages: execute_result.messages,
+                output: output_bytes.into(),
+            })
+        } else {
+            None
+        };
 
         // Convert ExecuteResult to SandboxedExecutionResult
         let result = SandboxedExecutionResult {
@@ -1271,10 +1275,10 @@ impl Executor for ExecutorV2 {
                     CallError::CodeNotFound => SandboxedExecutionError::CodeNotFound,
                     CallError::EntityNotFound => SandboxedExecutionError::EntityNotFound,
                     CallError::LockedPackage => SandboxedExecutionError::LockedPackage,
-                    CallError::Revert(api_error) => SandboxedExecutionError::Api(api_error),
+                    CallError::Revert(api_error) => SandboxedExecutionError::Revert(api_error),
                     CallError::InputInvalid => SandboxedExecutionError::InputInvalid,
                 }),
-            output: output_bytes.map(|x| x.into()),
+            output,
             gas_usage: Gas::new(execute_result.gas_usage.gas_spent()),
         };
 
@@ -1304,6 +1308,7 @@ impl Executor for ExecutorV2 {
             runtime_native_config,
             bundle_data,
             authorization_keys,
+            sandboxed: _,
         } = install_request;
 
         let mut state = InstallerState::new(self.config, tracking_copy, gas_limit);

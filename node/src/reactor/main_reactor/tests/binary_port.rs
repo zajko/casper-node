@@ -31,7 +31,7 @@ use casper_binary_port::{
     GetTrieFullResult, GlobalStateEntityQualifier, GlobalStateQueryResult, GlobalStateRequest,
     InformationRequest, InformationRequestTag, KeyPrefix, LastProgress, NetworkName, NodeStatus,
     PackageIdentifier, PurseIdentifier, ReactorStateName, RecordId, ResponseType, RewardResponse,
-    SandboxedExecutionRequest, SandboxedExecutionResult, Uptime, ValueWithProof,
+    SpeculativeExecutionResult, Uptime, ValueWithProof,
 };
 use casper_executor_wasm_common::chain_utils;
 use casper_storage::global_state::state::CommitProvider;
@@ -47,10 +47,10 @@ use casper_types::{
     BlockIdentifier, BlockSynchronizerStatus, BlockWithSignatures, ByteCode, ByteCodeAddr,
     ByteCodeHash, ByteCodeKind, CLValue, CLValueDictionary, ChainspecRawBytes, Contract,
     ContractRuntimeTag, ContractWasm, ContractWasmHash, DictionaryAddr, Digest, EntityAddr,
-    EntityKind, EntityVersions, GlobalStateIdentifier, HashAddr, Key, KeyTag, NextUpgrade, Package,
-    PackageAddr, Peers, PricingMode, ProtocolVersion, PublicKey, Rewards, SecretKey, StoredValue,
-    Transaction, TransactionArgs, TransactionEntryPoint, TransactionRuntimeParams, Transfer, URef,
-    U512,
+    EntityKind, EntityVersions, GlobalStateIdentifier, HashAddr, InitiatorAddr, Key, KeyTag,
+    NextUpgrade, Package, PackageAddr, Peers, PricingMode, ProtocolVersion, PublicKey, Rewards,
+    SecretKey, StoredValue, Transaction, TransactionArgs, TransactionEntryPoint,
+    TransactionInvocationTarget, TransactionRuntimeParams, TransactionTarget, Transfer, URef, U512,
 };
 use futures::{SinkExt, StreamExt};
 use rand::Rng;
@@ -1489,7 +1489,7 @@ async fn binary_port_sandboxed_execution_request() {
         .expect("Expected transaction to be included in a block.");
 
     // Create a VM read request to call the get method
-    let (latest_block, state_root_hash) = {
+    let (_latest_block, _state_root_hash) = {
         let (_, runner) = fixture.network.nodes().iter().next().unwrap();
         let storage = runner.main_reactor().storage();
 
@@ -1499,20 +1499,23 @@ async fn binary_port_sandboxed_execution_request() {
         let state_root_hash = *latest_block.state_root_hash();
         (latest_block, state_root_hash)
     };
-
-    let request = SandboxedExecutionRequest {
-        initiator: alice_public_key.to_account_hash(),
-        contract_address,
-        entry_point: "get".to_string(),
-        input: Bytes::new(),
-        gas_limit: 100_000_000,
-        block_time: latest_block.timestamp().into(),
-        state_hash: state_root_hash,
-        parent_block_hash: *latest_block.parent_hash(),
-        block_height: latest_block.height(),
-        chain_name: chain_name.clone(),
-    };
-
+    let transaction = Transaction::V1(
+        TransactionV1Builder::new()
+            .with_chain_name(chain_name.to_string())
+            .with_initiator_addr(InitiatorAddr::PublicKey(alice_public_key))
+            .with_transaction_target(TransactionTarget::Stored {
+                id: TransactionInvocationTarget::ByHash(contract_address),
+                runtime: TransactionRuntimeParams::VmCasperV2 {
+                    transferred_value: 0,
+                    seed: None,
+                    bundle_data: None,
+                },
+            })
+            .with_entry_point(TransactionEntryPoint::Custom("get".to_string()))
+            .with_transaction_args(TransactionArgs::Bytesrepr(vec![].into()))
+            .build()
+            .unwrap(),
+    );
     // Connect to binary port (1st node)
     let (_, first_node) = fixture.network.nodes().iter().next().unwrap();
     let binary_port_addr = first_node
@@ -1530,7 +1533,7 @@ async fn binary_port_sandboxed_execution_request() {
     // Let the network run in the background while we wait for the request to be processed
     let finish_cranking = fixture.run_until_stopped(rng.create_child());
     // Create and send the command
-    let request = Command::TrySandboxedExecution { request };
+    let request = Command::TrySpeculativeExec { transaction };
     let request_bytes = {
         let header = CommandHeader::new(request.tag(), 16);
         let header_bytes = ToBytes::to_bytes(&header).expect("should serialize");
@@ -1557,10 +1560,10 @@ async fn binary_port_sandboxed_execution_request() {
     let response_obj = binary_response_and_request.response();
     assert!(response_obj.is_success(), "{response_obj:?}");
 
-    let (result, remainder): (SandboxedExecutionResult, _) =
+    let (result, remainder): (SpeculativeExecutionResult, _) =
         FromBytes::from_bytes(response_obj.payload()).expect("should deserialize");
     assert!(remainder.is_empty());
-    assert!(result.is_success());
+    assert!(result.error().is_none());
 
     // The get entrypoint in flipper should return a single boolean value
     let (flipper_state, remainder) =

@@ -21,8 +21,7 @@ use thiserror::Error;
 
 use crate::{
     install::{InstallContractError, InstallContractRequest, InstallContractResult},
-    CallError, FatalHostError, GasUsage, SandboxedExecutionRequest, SandboxedExecutionResult,
-    WasmPreparationError,
+    CallError, FatalHostError, GasUsage, SandboxedExecutionResult, WasmPreparationError,
 };
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -597,8 +596,7 @@ pub trait Executor: Clone + Send {
     fn execute_sandbox<R: GlobalStateReader + 'static>(
         &self,
         tracking_copy: TrackingCopy<R>,
-        runtime_native_config: RuntimeNativeConfig,
-        request: SandboxedExecutionRequest,
+        execute_request: ExecuteRequest,
     ) -> Result<SandboxedExecutionResult, ExecuteError>;
 
     fn install_contract<R: GlobalStateReader + 'static>(

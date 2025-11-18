@@ -1,10 +1,10 @@
 use casper_types::{
     account::AccountHash,
-    bytesrepr,
-    bytesrepr::{Bytes, FromBytes, ToBytes},
-    BlockHash, BlockTime, Digest, Gas, HashAddr,
+    bytesrepr::{self, Bytes, FromBytes, ToBytes, U8_SERIALIZED_LENGTH},
+    BlockIdentifier, Gas, TransactionArgs, TransactionEntryPoint, TransactionTarget,
 };
 use core::convert::TryFrom;
+use std::collections::BTreeSet;
 
 /// Errors that can occur during sandboxed execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,10 +27,10 @@ pub enum SandboxedExecutionError {
     EntityNotFound,
     /// Tried to upgrade a contract in a locked package.
     LockedPackage,
-    /// Api error occurred.
-    Api(String),
     /// Input invalid
     InputInvalid,
+    /// V1 execution engine error
+    V1EngineError(String),
 }
 
 #[repr(u8)]
@@ -45,8 +45,8 @@ enum SandboxedExecutionErrorTag {
     NoActiveContract = 6,
     EntityNotFound = 7,
     LockedPackage = 8,
-    Api = 9,
-    InputInvalid = 10,
+    InputInvalid = 9,
+    V1EngineError = 10,
 }
 
 impl TryFrom<u8> for SandboxedExecutionErrorTag {
@@ -81,9 +81,11 @@ impl TryFrom<u8> for SandboxedExecutionErrorTag {
             x if x == SandboxedExecutionErrorTag::LockedPackage as u8 => {
                 Ok(SandboxedExecutionErrorTag::LockedPackage)
             }
-            x if x == SandboxedExecutionErrorTag::Api as u8 => Ok(SandboxedExecutionErrorTag::Api),
             x if x == SandboxedExecutionErrorTag::InputInvalid as u8 => {
                 Ok(SandboxedExecutionErrorTag::InputInvalid)
+            }
+            x if x == SandboxedExecutionErrorTag::V1EngineError as u8 => {
+                Ok(SandboxedExecutionErrorTag::V1EngineError)
             }
             _ => Err(bytesrepr::Error::Formatting),
         }
@@ -110,8 +112,8 @@ impl SandboxedExecutionError {
             }
             SandboxedExecutionError::EntityNotFound => SandboxedExecutionErrorTag::EntityNotFound,
             SandboxedExecutionError::LockedPackage => SandboxedExecutionErrorTag::LockedPackage,
-            SandboxedExecutionError::Api(_) => SandboxedExecutionErrorTag::Api,
             SandboxedExecutionError::InputInvalid => SandboxedExecutionErrorTag::InputInvalid,
+            SandboxedExecutionError::V1EngineError(_) => SandboxedExecutionErrorTag::V1EngineError,
         }
     }
 }
@@ -128,8 +130,52 @@ impl core::fmt::Display for SandboxedExecutionError {
             SandboxedExecutionError::NoActiveContract => write!(f, "no active contract"),
             SandboxedExecutionError::EntityNotFound => write!(f, "entity not found"),
             SandboxedExecutionError::LockedPackage => write!(f, "locked package"),
-            SandboxedExecutionError::Api(api_error) => write!(f, "{}", api_error),
             SandboxedExecutionError::InputInvalid => write!(f, "input invalid"),
+            SandboxedExecutionError::V1EngineError(v1_engine_error) => {
+                write!(f, "{}", v1_engine_error)
+            }
+        }
+    }
+}
+
+const SANDBOXED_EXECUTION_REQUEST_V1_TAG: u8 = 0;
+
+#[derive(Debug, PartialEq)]
+pub enum SandboxedExecutionRequest {
+    V1(SandboxedExecutionRequestV1),
+}
+
+impl ToBytes for SandboxedExecutionRequest {
+    fn to_bytes(&self) -> Result<Vec<u8>, bytesrepr::Error> {
+        let mut writer = bytesrepr::allocate_buffer(self)?;
+        match self {
+            SandboxedExecutionRequest::V1(sandboxed_execution_request_v1) => {
+                SANDBOXED_EXECUTION_REQUEST_V1_TAG.write_bytes(&mut writer)?;
+                sandboxed_execution_request_v1.write_bytes(&mut writer)?;
+            }
+        }
+        Ok(writer)
+    }
+
+    fn serialized_length(&self) -> usize {
+        U8_SERIALIZED_LENGTH
+            + match self {
+                SandboxedExecutionRequest::V1(sandboxed_execution_request_v1) => {
+                    sandboxed_execution_request_v1.serialized_length()
+                }
+            }
+    }
+}
+
+impl FromBytes for SandboxedExecutionRequest {
+    fn from_bytes(bytes: &[u8]) -> Result<(Self, &[u8]), bytesrepr::Error> {
+        let (enum_tag, remainder) = u8::from_bytes(bytes)?;
+        match enum_tag {
+            SANDBOXED_EXECUTION_REQUEST_V1_TAG => {
+                let (v1, remainder) = SandboxedExecutionRequestV1::from_bytes(remainder)?;
+                Ok((SandboxedExecutionRequest::V1(v1), remainder))
+            }
+            _ => Err(bytesrepr::Error::Formatting),
         }
     }
 }
@@ -138,100 +184,63 @@ impl core::fmt::Display for SandboxedExecutionError {
 /// sentinels, and similar functionality that does not require invocation of other contracts or
 /// mutation of state are supported.
 #[derive(Debug, PartialEq)]
-pub struct SandboxedExecutionRequest {
+pub struct SandboxedExecutionRequestV1 {
+    /// Block identifier. None means "tip"
+    pub block_identifier: Option<BlockIdentifier>,
+    /// Transaction target
+    pub target: TransactionTarget,
+    /// Entry point
+    pub entry_point: TransactionEntryPoint,
     /// The address of the account that would initiate the contract call.
     pub initiator: AccountHash,
-    /// The address of the contract to query.
-    pub contract_address: HashAddr,
-    /// The entry point to call.
-    pub entry_point: String,
     /// Input data for the query.
-    pub input: Bytes,
-    /// Gas limit for the query execution.
-    ///
-    /// This prevents infinite loops and resource exhaustion attacks.
-    /// The caller is not charged actual tokens, but must provide a limit
-    /// to protect against malicious contracts that could stall the node.
-    pub gas_limit: u64,
-    /// Block time for the query context.
-    pub block_time: BlockTime,
-    /// State root hash to query against.
-    pub state_hash: Digest,
-    /// Parent block hash for context.
-    pub parent_block_hash: BlockHash,
-    /// Block height for context.
-    pub block_height: u64,
-    /// Chain name for context.
-    pub chain_name: String,
+    pub args: TransactionArgs,
+    /// Authorization keys
+    pub authorization_keys: BTreeSet<AccountHash>,
 }
 
-impl ToBytes for SandboxedExecutionRequest {
+impl ToBytes for SandboxedExecutionRequestV1 {
     fn to_bytes(&self) -> Result<Vec<u8>, bytesrepr::Error> {
         let mut writer = bytesrepr::allocate_buffer(self)?;
-        self.initiator.write_bytes(&mut writer)?;
-        self.contract_address.write_bytes(&mut writer)?;
-        self.entry_point.write_bytes(&mut writer)?;
-        self.input.write_bytes(&mut writer)?;
-        self.gas_limit.write_bytes(&mut writer)?;
-        self.block_time.write_bytes(&mut writer)?;
-        self.state_hash.write_bytes(&mut writer)?;
-        self.parent_block_hash.write_bytes(&mut writer)?;
-        self.block_height.write_bytes(&mut writer)?;
-        self.chain_name.write_bytes(&mut writer)?;
+        self.write_bytes(&mut writer)?;
         Ok(writer)
     }
 
     fn serialized_length(&self) -> usize {
-        self.initiator.serialized_length()
-            + self.contract_address.serialized_length()
+        self.block_identifier.serialized_length()
+            + self.target.serialized_length()
+            + self.initiator.serialized_length()
             + self.entry_point.serialized_length()
-            + self.input.serialized_length()
-            + self.gas_limit.serialized_length()
-            + self.block_time.serialized_length()
-            + self.state_hash.serialized_length()
-            + self.parent_block_hash.serialized_length()
-            + self.block_height.serialized_length()
-            + self.chain_name.serialized_length()
+            + self.args.serialized_length()
+            + self.authorization_keys.serialized_length()
     }
 
     fn write_bytes(&self, writer: &mut Vec<u8>) -> Result<(), bytesrepr::Error> {
-        self.initiator.write_bytes(writer)?;
-        self.contract_address.write_bytes(writer)?;
+        self.block_identifier.write_bytes(writer)?;
+        self.target.write_bytes(writer)?;
         self.entry_point.write_bytes(writer)?;
-        self.input.write_bytes(writer)?;
-        self.gas_limit.write_bytes(writer)?;
-        self.block_time.write_bytes(writer)?;
-        self.state_hash.write_bytes(writer)?;
-        self.parent_block_hash.write_bytes(writer)?;
-        self.block_height.write_bytes(writer)?;
-        self.chain_name.write_bytes(writer)
+        self.initiator.write_bytes(writer)?;
+        self.args.write_bytes(writer)?;
+        self.authorization_keys.write_bytes(writer)
     }
 }
 
-impl FromBytes for SandboxedExecutionRequest {
+impl FromBytes for SandboxedExecutionRequestV1 {
     fn from_bytes(bytes: &[u8]) -> Result<(Self, &[u8]), bytesrepr::Error> {
-        let (initiator, remainder) = FromBytes::from_bytes(bytes)?;
-        let (contract_address, remainder) = FromBytes::from_bytes(remainder)?;
+        let (block_identifier, remainder) = FromBytes::from_bytes(bytes)?;
+        let (target, remainder) = FromBytes::from_bytes(remainder)?;
         let (entry_point, remainder) = FromBytes::from_bytes(remainder)?;
-        let (input, remainder) = FromBytes::from_bytes(remainder)?;
-        let (gas_limit, remainder) = FromBytes::from_bytes(remainder)?;
-        let (block_time, remainder) = FromBytes::from_bytes(remainder)?;
-        let (state_hash, remainder) = FromBytes::from_bytes(remainder)?;
-        let (parent_block_hash, remainder) = FromBytes::from_bytes(remainder)?;
-        let (block_height, remainder) = FromBytes::from_bytes(remainder)?;
-        let (chain_name, remainder) = FromBytes::from_bytes(remainder)?;
+        let (initiator, remainder) = FromBytes::from_bytes(remainder)?;
+        let (args, remainder) = FromBytes::from_bytes(remainder)?;
+        let (authorization_keys, remainder) = FromBytes::from_bytes(remainder)?;
         Ok((
-            SandboxedExecutionRequest {
-                initiator,
-                contract_address,
+            SandboxedExecutionRequestV1 {
+                block_identifier,
+                target,
                 entry_point,
-                input,
-                gas_limit,
-                block_time,
-                state_hash,
-                parent_block_hash,
-                block_height,
-                chain_name,
+                initiator,
+                args,
+                authorization_keys,
             },
             remainder,
         ))
@@ -242,20 +251,23 @@ impl FromBytes for SandboxedExecutionRequest {
 impl SandboxedExecutionRequest {
     /// Generates a random request for testing.
     pub fn random(rng: &mut casper_types::testing::TestRng) -> Self {
-        use rand::Rng;
+        use std::iter::FromIterator;
 
-        SandboxedExecutionRequest {
+        use rand::Rng;
+        let block_identifier = if rng.gen_bool(0.5) {
+            Some(BlockIdentifier::random(rng))
+        } else {
+            None
+        };
+
+        SandboxedExecutionRequest::V1(SandboxedExecutionRequestV1 {
+            block_identifier,
+            target: TransactionTarget::random(rng),
+            entry_point: TransactionEntryPoint::random(rng),
             initiator: AccountHash::new(rng.gen()),
-            contract_address: rng.gen(),
-            entry_point: format!("entry_point_{}", rng.gen::<u32>()),
-            input: vec![rng.gen::<u8>(); 32].into(),
-            gas_limit: rng.gen_range(1000..1000000),
-            block_time: BlockTime::new(rng.gen()),
-            state_hash: Digest::random(rng),
-            parent_block_hash: BlockHash::random(rng),
-            block_height: rng.gen(),
-            chain_name: String::default(),
-        }
+            args: TransactionArgs::Bytesrepr(Bytes::from(vec![0, 1, 2])),
+            authorization_keys: BTreeSet::from_iter(rng.random_vec(0..10)),
+        })
     }
 }
 
@@ -297,7 +309,7 @@ impl ToBytes for SandboxedExecutionError {
         let mut writer = bytesrepr::allocate_buffer(self)?;
         let tag: u8 = self.tag() as u8;
         tag.write_bytes(&mut writer)?;
-        if let SandboxedExecutionError::Api(msg) = self {
+        if let SandboxedExecutionError::V1EngineError(msg) = self {
             msg.write_bytes(&mut writer)?;
         }
         Ok(writer)
@@ -306,7 +318,7 @@ impl ToBytes for SandboxedExecutionError {
     fn serialized_length(&self) -> usize {
         let base = bytesrepr::U8_SERIALIZED_LENGTH; // tag
         match self {
-            SandboxedExecutionError::Api(msg) => base + msg.serialized_length(),
+            SandboxedExecutionError::V1EngineError(msg) => base + msg.serialized_length(),
             _ => base,
         }
     }
@@ -349,12 +361,12 @@ impl FromBytes for SandboxedExecutionError {
             SandboxedExecutionErrorTag::LockedPackage => {
                 Ok((SandboxedExecutionError::LockedPackage, remainder))
             }
-            SandboxedExecutionErrorTag::Api => {
-                let (msg, rem) = String::from_bytes(remainder)?;
-                Ok((SandboxedExecutionError::Api(msg), rem))
-            }
             SandboxedExecutionErrorTag::InputInvalid => {
                 Ok((SandboxedExecutionError::InputInvalid, remainder))
+            }
+            SandboxedExecutionErrorTag::V1EngineError => {
+                let (msg, rem) = String::from_bytes(remainder)?;
+                Ok((SandboxedExecutionError::V1EngineError(msg), rem))
             }
         }
     }

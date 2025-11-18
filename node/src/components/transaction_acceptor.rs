@@ -233,11 +233,13 @@ impl TransactionAcceptor {
                 self.reject_transaction(effect_builder, *event_metadata, error)
             }
             Some(entity) => {
-                if let Err(parameter_failure) =
-                    is_authorized_entity(&entity, &self.administrators, &event_metadata)
-                {
-                    let error = Error::parameter_failure(&block_header, parameter_failure);
-                    return self.reject_transaction(effect_builder, *event_metadata, error);
+                if !event_metadata.source.is_speculative_exec() {
+                    if let Err(parameter_failure) =
+                        is_authorized_entity(&entity, &self.administrators, &event_metadata)
+                    {
+                        let error = Error::parameter_failure(&block_header, parameter_failure);
+                        return self.reject_transaction(effect_builder, *event_metadata, error);
+                    }
                 }
                 let protocol_version = block_header.protocol_version();
                 let balance_handling = BalanceHandling::Available;
@@ -846,17 +848,19 @@ impl TransactionAcceptor {
         effect_builder: EffectBuilder<REv>,
         event_metadata: Box<EventMetadata>,
     ) -> Effects<Event> {
-        let is_valid = match &event_metadata.meta_transaction {
-            MetaTransaction::Deploy(meta_deploy) => meta_deploy
-                .deploy()
-                .is_valid()
-                .map_err(|err| Error::InvalidTransaction(err.into())),
-            MetaTransaction::V1(txn) => txn
-                .verify()
-                .map_err(|err| Error::InvalidTransaction(err.into())),
-        };
-        if let Err(error) = is_valid {
-            return self.reject_transaction(effect_builder, *event_metadata, error);
+        if !event_metadata.source.is_speculative_exec() {
+            let is_valid = match &event_metadata.meta_transaction {
+                MetaTransaction::Deploy(meta_deploy) => meta_deploy
+                    .deploy()
+                    .is_valid()
+                    .map_err(|err| Error::InvalidTransaction(err.into())),
+                MetaTransaction::V1(txn) => txn
+                    .verify()
+                    .map_err(|err| Error::InvalidTransaction(err.into())),
+            };
+            if let Err(error) = is_valid {
+                return self.reject_transaction(effect_builder, *event_metadata, error);
+            }
         }
 
         // If this has been received from the speculative exec server, we just want to call the

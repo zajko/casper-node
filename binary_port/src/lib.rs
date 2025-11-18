@@ -48,7 +48,8 @@ pub use purse_identifier::PurseIdentifier;
 pub use record_id::{RecordId, UnknownRecordId};
 pub use response_type::{PayloadEntity, ResponseType};
 pub use sandboxed_execution::{
-    SandboxedExecutionError, SandboxedExecutionRequest, SandboxedExecutionResult,
+    SandboxedExecutionError, SandboxedExecutionRequest, SandboxedExecutionRequestV1,
+    SandboxedExecutionResult,
 };
 pub use speculative_execution_result::SpeculativeExecutionResult;
 pub use state_request::GlobalStateRequest;

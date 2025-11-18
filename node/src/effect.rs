@@ -154,7 +154,7 @@ use crate::{
         network::{blocklist::BlocklistJustification, FromIncoming, NetworkInsights},
         transaction_acceptor,
     },
-    contract_runtime::{ExecutionPreState, SpeculativeExecutionResult},
+    contract_runtime::ExecutionPreState,
     effect::announcements::NonExecutableBlockAnnouncement,
     failpoints::FailpointActivation,
     reactor::{main_reactor::ReactorState, EventQueueHandle, QueueKind},
@@ -2340,27 +2340,6 @@ impl<REv> EffectBuilder<REv> {
                 responder,
             },
             QueueKind::ToStorage,
-        )
-        .await
-    }
-
-    /// Requests execution of a single transaction, without committing its effects.  Intended to be
-    /// used for debugging & discovery purposes.
-    pub(crate) async fn speculatively_execute(
-        self,
-        block_header: Box<BlockHeader>,
-        transaction: Box<Transaction>,
-    ) -> SpeculativeExecutionResult
-    where
-        REv: From<ContractRuntimeRequest>,
-    {
-        self.make_request(
-            |responder| ContractRuntimeRequest::SpeculativelyExecute {
-                block_header,
-                transaction,
-                responder,
-            },
-            QueueKind::ContractRuntime,
         )
         .await
     }

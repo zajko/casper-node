@@ -282,6 +282,14 @@ impl Source {
             Source::Client | Source::SpeculativeExec | Source::Ourself => None,
         }
     }
+
+    /// If `self` originated from speculative execution.
+    pub(crate) fn is_speculative_exec(&self) -> bool {
+        match self {
+            Source::SpeculativeExec => true,
+            Source::PeerGossiped(_) | Source::Peer(_) | Source::Client | Source::Ourself => false,
+        }
+    }
 }
 
 impl Display for Source {
