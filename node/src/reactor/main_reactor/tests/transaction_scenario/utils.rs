@@ -9,8 +9,8 @@ use casper_storage::{
 };
 use casper_types::{
     account::AccountHash, bytesrepr::Bytes, testing::TestRng, EraId, ExecutionInfo, FeeHandling,
-    KeyTag, PricingHandling, PricingMode, PublicKey, RefundHandling, SecretKey, TimeDiff,
-    Transaction, TransactionHash, TransactionRuntimeParams, U512,
+    KeyTag, PricingHandling, PricingMode, ProtocolVersion, PublicKey, RefundHandling, SecretKey,
+    TimeDiff, Transaction, TransactionHash, TransactionRuntimeParams, TransactionV1Config, U512,
 };
 use once_cell::sync::OnceCell;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
@@ -349,11 +349,15 @@ impl TestScenario {
             .transaction_config
             .transaction_v1_config
             .get_lane_by_id(lane_id)
-            .map(|el| el.max_transaction_gas_limit)
+            .map(|el| el.max_transaction_gas_limit())
     }
 
     pub(crate) fn get_block_height(&self) -> u64 {
         self.data.block_height
+    }
+
+    pub(crate) fn get_protocol_version(&self) -> ProtocolVersion {
+        self.data.fixture.chainspec.protocol_version()
     }
 }
 
@@ -368,6 +372,8 @@ pub(crate) struct TestScenarioBuilder {
     maybe_fee_handling: Option<FeeHandling>,
     maybe_balance_hold_interval_override: Option<TimeDiff>,
     maybe_minimum_era_height: Option<u64>,
+    enable_vm2: bool,
+    maybe_transaction_v1_config: Option<TransactionV1Config>,
 }
 
 impl TestScenarioBuilder {
@@ -384,6 +390,8 @@ impl TestScenarioBuilder {
             maybe_fee_handling,
             maybe_balance_hold_interval_override,
             maybe_minimum_era_height,
+            enable_vm2,
+            maybe_transaction_v1_config,
         } = self;
         let (secret_keys, stakes) = maybe_stakes_setup.unwrap_or({
             /* Node 0 is effectively guaranteed to be the proposer. */
@@ -409,7 +417,14 @@ impl TestScenarioBuilder {
                 era_id: ERA_ONE,
                 within: ONE_MIN,
             });
-        let config = ConfigsOverride::default().with_pricing_handling(pricing_handling);
+        let config = ConfigsOverride::default()
+            .with_pricing_handling(pricing_handling)
+            .with_vm_casper_v2(enable_vm2);
+        let config = if let Some(transaction_v1_config) = maybe_transaction_v1_config {
+            config.with_transaction_v1_config(transaction_v1_config)
+        } else {
+            config
+        };
         let config = if let Some(refund_handling) = maybe_refund_handling {
             config.with_refund_handling(refund_handling)
         } else {
@@ -454,6 +469,11 @@ impl TestScenarioBuilder {
         self
     }
 
+    pub fn with_pricing_handling(mut self, pricing_handling: PricingHandling) -> Self {
+        self.maybe_pricing_handling = Some(pricing_handling);
+        self
+    }
+
     pub(crate) fn with_fee_handling(mut self, fee_handling: FeeHandling) -> Self {
         self.maybe_fee_handling = Some(fee_handling);
         self
@@ -466,6 +486,19 @@ impl TestScenarioBuilder {
 
     pub(crate) fn with_minimum_era_height(mut self, minimum_era_height: u64) -> Self {
         self.maybe_minimum_era_height = Some(minimum_era_height);
+        self
+    }
+
+    pub(crate) fn with_enable_vm2(mut self, enable_vm2: bool) -> Self {
+        self.enable_vm2 = enable_vm2;
+        self
+    }
+
+    pub(crate) fn with_transaction_v1_config(
+        mut self,
+        transaction_v1_config: TransactionV1Config,
+    ) -> Self {
+        self.maybe_transaction_v1_config = Some(transaction_v1_config);
         self
     }
 }

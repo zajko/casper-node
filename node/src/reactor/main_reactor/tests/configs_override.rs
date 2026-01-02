@@ -136,6 +136,11 @@ impl ConfigsOverride {
         self.node_config_override = config;
         self
     }
+
+    pub(crate) fn with_vm_casper_v2(mut self, vm_casper_v2: bool) -> Self {
+        self.vm_casper_v2 = vm_casper_v2;
+        self
+    }
 }
 
 impl Default for ConfigsOverride {
