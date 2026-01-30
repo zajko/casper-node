@@ -471,7 +471,7 @@ async fn vm2_contract_can_be_called_using_by_package_hash_with_version() {
 }
 
 #[tokio::test]
-async fn vm2_contract_calling_by_hash_nonexistent_fails() {
+async fn vm2_contract_calling_by_package_hash_nonexistent_fails() {
     let module_bytes = read_wasm("vm2_upgradable.wasm");
     let mut rng = TestRng::new();
     let builder = TestScenarioBuilder::new().with_enable_vm2(true);
@@ -691,7 +691,7 @@ async fn vm2_contract_calling_by_hash_after_upgrade() {
 }
 
 #[tokio::test]
-async fn vm2_contract_calling_by_name_after_upgrade() {
+async fn vm2_contract_calling_by_package_name_after_upgrade() {
     let module_bytes = read_wasm("vm2_upgradable_storing_package.wasm");
     let mut rng = TestRng::new();
     let mut test_scenario = TestScenarioBuilder::new()
@@ -836,7 +836,7 @@ async fn vm2_contract_calling_by_name_after_upgrade() {
 }
 
 #[tokio::test]
-async fn vm2_contract_calling_by_name_with_addressable_entity_after_upgrade() {
+async fn vm2_contract_calling_by_package_name_with_addressable_entity_after_upgrade() {
     let module_bytes = read_wasm("vm2_upgradable_storing_package.wasm");
     let mut rng = TestRng::new();
     let mut test_scenario = TestScenarioBuilder::new()
@@ -983,7 +983,7 @@ async fn vm2_contract_calling_by_name_with_addressable_entity_after_upgrade() {
 }
 
 #[tokio::test]
-async fn vm2_contract_calling_by_hash_with_addressable_entity_after_upgrade() {
+async fn vm2_contract_calling_by_package_hash_with_addressable_entity_after_upgrade() {
     let module_bytes = read_wasm("vm2_upgradable.wasm");
     let mut rng = TestRng::new();
     let mut test_scenario = TestScenarioBuilder::new()
@@ -1130,11 +1130,145 @@ async fn vm2_contract_calling_by_hash_with_addressable_entity_after_upgrade() {
         .await;
 }
 
+#[tokio::test]
+async fn vm2_contract_calling_by_hash_with_addressable_entity_after_upgrade() {
+    let module_bytes = read_wasm("vm2_upgradable.wasm");
+    let mut rng = TestRng::new();
+    let mut test_scenario = TestScenarioBuilder::new()
+        .with_pricing_handling(PricingHandling::PaymentLimited)
+        .with_addressable_entity(true)
+        .with_enable_vm2(true)
+        .with_transaction_v1_config(TransactionV1Config::very_big_wasm_lane())
+        .build(&mut rng)
+        .await;
+    let chain_name = test_scenario.chain_name();
+    test_scenario.setup().await.unwrap();
+    let mut txn: Transaction = Transaction::from(
+        TransactionV1Builder::new_session(
+            true,
+            module_bytes.into(),
+            TransactionRuntimeParams::VmCasperV2 {
+                transferred_value: 0,
+                seed: None,
+                bundle_data: None,
+            },
+        )
+        .with_entry_point(TransactionEntryPoint::Custom("new".to_string()))
+        .with_transaction_args(casper_types::TransactionArgs::Bytesrepr(
+            0_u8.to_bytes().unwrap().into(),
+        ))
+        .with_initiator_addr(PublicKey::from(ALICE_SECRET_KEY.as_ref()))
+        .with_pricing_mode(PricingMode::PaymentLimited {
+            payment_amount: 100_000_000_000_u64,
+            gas_price_tolerance: 1,
+            standard_payment: true,
+        })
+        .with_chain_name(chain_name.clone())
+        .build()
+        .unwrap(),
+    );
+    txn.sign(&ALICE_SECRET_KEY);
+    let hash = txn.hash();
+    let execution_infos = test_scenario.run(vec![txn]).await.unwrap();
+    test_scenario.assert(TransactionSuccessful::new(hash)).await;
+    let contract_hash = peel_contract_hash_info(execution_infos);
+    let new_code = Bytes::from(read_wasm("vm2_upgradable_v2.wasm"));
+    let mut txn: Transaction = Transaction::from(
+        TransactionV1Builder::new_targeting_stored(
+            TransactionInvocationTarget::ByHash(contract_hash),
+            "perform_upgrade",
+            TransactionRuntimeParams::VmCasperV2 {
+                transferred_value: 0,
+                seed: None,
+                bundle_data: None,
+            },
+        )
+        .with_initiator_addr(PublicKey::from(ALICE_SECRET_KEY.as_ref()))
+        .with_transaction_args(casper_types::TransactionArgs::Bytesrepr(
+            new_code.to_bytes().unwrap().into(),
+        ))
+        .with_pricing_mode(PricingMode::PaymentLimited {
+            payment_amount: 100_000_000_000_u64,
+            gas_price_tolerance: 1,
+            standard_payment: true,
+        })
+        .with_chain_name(chain_name.clone())
+        .build()
+        .unwrap(),
+    );
+    txn.sign(&ALICE_SECRET_KEY);
+    let hash = txn.hash();
+    test_scenario.run(vec![txn]).await.unwrap();
+    test_scenario.assert(TransactionSuccessful::new(hash)).await;
+    let mut txn: Transaction = Transaction::from(
+        TransactionV1Builder::new_targeting_stored(
+            TransactionInvocationTarget::ByHash(contract_hash),
+            "version",
+            TransactionRuntimeParams::VmCasperV2 {
+                transferred_value: 0,
+                seed: None,
+                bundle_data: None,
+            },
+        )
+        .with_initiator_addr(PublicKey::from(ALICE_SECRET_KEY.as_ref()))
+        .with_transaction_args(casper_types::TransactionArgs::Bytesrepr(vec![].into()))
+        .with_pricing_mode(PricingMode::PaymentLimited {
+            payment_amount: 100_000_000_000_u64,
+            gas_price_tolerance: 1,
+            standard_payment: true,
+        })
+        .with_chain_name(chain_name.clone())
+        .build()
+        .unwrap(),
+    );
+    txn.sign(&ALICE_SECRET_KEY);
+    let hash = txn.hash();
+    test_scenario.run(vec![txn]).await.unwrap();
+    test_scenario.assert(TransactionSuccessful::new(hash)).await;
+    test_scenario
+        .assert(ExecutionResultHasRet::new(
+            hash,
+            RetValue::Bytes("v2".to_bytes().unwrap().into()),
+        ))
+        .await;
+
+    // The old version (1) should be disabled by the upgrade
+    let mut txn: Transaction = Transaction::from(
+        TransactionV1Builder::new_targeting_stored(
+            TransactionInvocationTarget::ByHash(contract_hash),
+            "version",
+            TransactionRuntimeParams::VmCasperV2 {
+                transferred_value: 0,
+                seed: None,
+                bundle_data: None,
+            },
+        )
+        .with_initiator_addr(PublicKey::from(ALICE_SECRET_KEY.as_ref()))
+        .with_transaction_args(casper_types::TransactionArgs::Bytesrepr(vec![].into()))
+        .with_pricing_mode(PricingMode::PaymentLimited {
+            payment_amount: 100_000_000_000_u64,
+            gas_price_tolerance: 1,
+            standard_payment: true,
+        })
+        .with_chain_name(chain_name)
+        .build()
+        .unwrap(),
+    );
+    txn.sign(&ALICE_SECRET_KEY);
+    let hash = txn.hash();
+    test_scenario.run(vec![txn]).await.unwrap();
+    test_scenario
+        .assert(TransactionFailure::expected_error_message(
+            hash,
+            "no active contract",
+        ))
+        .await;
+}
+
 fn peel_package_hash_info(execution_infos: Vec<ExecutionInfo>) -> [u8; 32] {
-    let ei = execution_infos
+    let er = execution_infos
         .first()
-        .expect("Expecting at least one ExecutionInfo");
-    let er = ei
+        .expect("Expecting at least one ExecutionInfo")
         .execution_result
         .clone()
         .expect("Expected execution result");
@@ -1172,6 +1306,43 @@ fn peel_package_hash_info(execution_infos: Vec<ExecutionInfo>) -> [u8; 32] {
                 .collect::<Vec<[u8; 32]>>()
                 .first()
                 .expect("Expected to find key under which the package was stored")
+        }
+    }
+}
+
+fn peel_contract_hash_info(execution_infos: Vec<ExecutionInfo>) -> [u8; 32] {
+    let er = execution_infos
+        .first()
+        .expect("Expecting at least one ExecutionInfo")
+        .execution_result
+        .clone()
+        .expect("Expected execution result");
+    match er {
+        casper_types::execution::ExecutionResult::V1(_) => {
+            panic!("Shouldn't happen")
+        }
+        casper_types::execution::ExecutionResult::V2(execution_result_v2) => {
+            let effects = execution_result_v2.effects;
+            let transforms = effects.transforms();
+            *transforms
+                .iter()
+                .filter_map(|el| {
+                    let key = el.key();
+                    let kind = el.kind();
+                    match (key, kind) {
+                        (
+                            Key::AddressableEntity(EntityAddr::SmartContract(addr)),
+                            TransformKindV2::Write(StoredValue::AddressableEntity(_)),
+                        ) => Some(*addr),
+                        (Key::Hash(addr), TransformKindV2::Write(StoredValue::Contract(_))) => {
+                            Some(*addr)
+                        }
+                        _ => None,
+                    }
+                })
+                .collect::<Vec<[u8; 32]>>()
+                .first()
+                .expect("Expected to find key under which the contract was stored")
         }
     }
 }

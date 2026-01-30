@@ -10,7 +10,7 @@ use casper_executor_wasm_common::{
 };
 use casper_executor_wasm_interface::{
     executor::{
-        ExecuteError, ExecuteRequestBuilder, ExecuteResult, ExecutionKind, Executor, PackagePointer,
+        ExecuteError, ExecuteRequestBuilder, ExecuteResult, ExecutionKind, Executor, InvocablePointer,
     },
     Caller, FatalHostError, VMError, VMResult,
 };
@@ -81,7 +81,7 @@ pub(crate) fn host_call<S: GlobalStateReader + 'static>(
         .with_caller_key(caller.context().callee)
         .with_gas_limit(gas_limit)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(smart_contract_addr),
+            package_pointer: InvocablePointer::PackageHashAddr(smart_contract_addr),
             entry_point: entry_point_name.clone(),
             version,
             protocol_version_major,
@@ -399,7 +399,7 @@ pub(crate) fn host_upgrade<S: GlobalStateReader + 'static>(
             .with_caller_key(caller.context().callee)
             .with_gas_limit(gas_limit)
             .with_execution_kind(ExecutionKind::Stored {
-                package_pointer: PackagePointer::HashAddr(smart_contract_addr),
+                package_pointer: InvocablePointer::PackageHashAddr(smart_contract_addr),
                 entry_point: entry_point_name.clone(),
                 version: None,
                 protocol_version_major: None,

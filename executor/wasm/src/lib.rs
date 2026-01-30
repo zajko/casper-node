@@ -24,8 +24,8 @@ use casper_executor_wasm_interface::{
     executor::{
         AuctionMethods, ControlMethods, CryptoMethods, EmitMethods, ExecuteError, ExecuteRequest,
         ExecuteRequestBuilder, ExecuteResult, ExecuteWithProviderError, ExecuteWithProviderResult,
-        ExecutionKind, Executor, FFIMenu, GlobalStateMethods, IOMethods, MintMethods,
-        PackagePointer, SystemContractMenu,
+        ExecutionKind, Executor, FFIMenu, GlobalStateMethods, IOMethods, InvocablePointer,
+        MintMethods, SystemContractMenu,
     },
     install::{
         InstallContractError, InstallContractRequest, InstallContractResult,
@@ -66,6 +66,7 @@ use casper_types::{
     TypeDefinition, TypeDefinitionKind, TypeEnumVariant, TypePrimitive, TypeStructField, TypeUid,
     URef, WasmV2Config, NAME_FOR_V2_CONTRACT_MAIN_PURSE, U512,
 };
+use itertools::Itertools;
 use tracing::{debug, error, info, trace, warn};
 
 #[cfg(any(feature = "testing", test))]
@@ -1271,14 +1272,14 @@ impl ExecutorV2 {
 
     fn resolve_stored_package_hash<R: GlobalStateReader + 'static>(
         &self,
-        package_pointer: &PackagePointer,
+        package_pointer: &InvocablePointer,
         caller_key: &Key,
         tracking_copy: &mut TrackingCopy<R>,
     ) -> Option<HashAddr> {
         let is_addressable_entity = tracking_copy.addressable_entity_enabled();
         let contract_package_addr = match package_pointer {
-            PackagePointer::HashAddr(hash_addr) => *hash_addr,
-            PackagePointer::NamedKeyName(name) => {
+            InvocablePointer::PackageHashAddr(hash_addr) => *hash_addr,
+            InvocablePointer::PackageNamedKeyName(name) => {
                 let global_state_key = match caller_key {
                     Key::Account(_) | Key::Hash(_) | Key::Package(_) if !is_addressable_entity => {
                         *caller_key
@@ -1347,6 +1348,47 @@ impl ExecutorV2 {
                     None => return None,
                 }
             }
+            InvocablePointer::ContractHashAddr(hash_addr) => {
+                let key = if is_addressable_entity {
+                    Key::AddressableEntity(EntityAddr::SmartContract(*hash_addr))
+                } else {
+                    Key::Hash(*hash_addr)
+                };
+                let contract_fetch_result = tracking_copy.read(&key);
+                let (package_key, package_addr) = match contract_fetch_result {
+                    Ok(Some(StoredValue::AddressableEntity(addressable_entity))) => {
+                        let package_addr = addressable_entity.package();
+                        (Key::Package(package_addr.clone()), package_addr.value())
+                    }
+                    Ok(Some(StoredValue::Contract(contract))) => {
+                        let package_hash = contract.contract_package_hash();
+                        (Key::Hash(package_hash.value()), package_hash.value())
+                    }
+                    _ => return None,
+                };
+                let package_fetch_result = tracking_copy.read(&package_key);
+                match package_fetch_result {
+                    Ok(Some(StoredValue::SmartContract(package))) => {
+                        if !package.is_entity_enabled(&EntityAddr::SmartContract(*hash_addr)) {
+                            // We can't proceed if this contract hash is disabled
+                            return None;
+                        }
+                    }
+                    Ok(Some(StoredValue::ContractPackage(package))) => {
+                        if !package
+                            .enabled_versions()
+                            .iter()
+                            .any(|(_, v)| v.value() == *hash_addr)
+                        {
+                            // We can't proceed if thic contract hash is disabled
+                            return None;
+                        }
+                    }
+                    _ => return None,
+                };
+                package_addr
+            }
+            InvocablePointer::ContractNamedKeyName(_) => todo!(),
         };
         Some(contract_package_addr)
     }
@@ -1959,7 +2001,7 @@ impl Executor for ExecutorV2 {
                 .with_initiator(initiator)
                 .with_caller_key(caller_key)
                 .with_execution_kind(ExecutionKind::Stored {
-                    package_pointer: PackagePointer::HashAddr(package_addr),
+                    package_pointer: InvocablePointer::PackageHashAddr(package_addr),
                     entry_point: entry_point_name,
                     version: None,
                     protocol_version_major: None,

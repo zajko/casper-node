@@ -506,9 +506,11 @@ impl From<FFIMenu> for u32 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PackagePointer {
-    HashAddr(HashAddr),
-    NamedKeyName(String),
+pub enum InvocablePointer {
+    PackageHashAddr(HashAddr),
+    PackageNamedKeyName(String),
+    ContractHashAddr(HashAddr),
+    ContractNamedKeyName(String),
 }
 
 /// Target for Wasm execution.
@@ -520,7 +522,7 @@ pub enum ExecutionKind {
     Stored {
         /// Either Address of the contract's package or name of the NamedKey which holds the
         /// package key.
-        package_pointer: PackagePointer,
+        package_pointer: InvocablePointer,
         /// Entry point to call.
         entry_point: String,
         /// version of the contract, `latest matching` if None

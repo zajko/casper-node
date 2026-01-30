@@ -7,7 +7,7 @@ use casper_executor_wasm_common::error::CallError;
 use casper_executor_wasm_interface::{
     executor::{
         ExecuteError, ExecuteRequest, ExecuteRequestBuilder, ExecuteWithProviderError,
-        ExecuteWithProviderResult, ExecutionKind, PackagePointer,
+        ExecuteWithProviderResult, ExecutionKind, InvocablePointer,
     },
     install::{
         InstallContractError, InstallContractRequest, InstallContractRequestBuilder,
@@ -382,7 +382,16 @@ impl WasmV2Request {
                         id: TransactionInvocationTarget::ByHash(smart_contract_addr),
                         entry_point,
                     } => ExecutionKind::Stored {
-                        package_pointer: PackagePointer::HashAddr(smart_contract_addr),
+                        package_pointer: InvocablePointer::ContractHashAddr(smart_contract_addr),
+                        entry_point: entry_point.clone(),
+                        version: None,
+                        protocol_version_major: None,
+                    },
+                    Target::Stored {
+                        id: TransactionInvocationTarget::ByName(name),
+                        entry_point,
+                    } => ExecutionKind::Stored {
+                        package_pointer: InvocablePointer::ContractNamedKeyName(name),
                         entry_point: entry_point.clone(),
                         version: None,
                         protocol_version_major: None,
@@ -396,7 +405,7 @@ impl WasmV2Request {
                             },
                         entry_point,
                     } => ExecutionKind::Stored {
-                        package_pointer: PackagePointer::HashAddr(addr.value()),
+                        package_pointer: InvocablePointer::PackageHashAddr(addr.value()),
                         entry_point: entry_point.clone(),
                         version,
                         protocol_version_major,
@@ -410,7 +419,7 @@ impl WasmV2Request {
                             },
                         entry_point,
                     } => ExecutionKind::Stored {
-                        package_pointer: PackagePointer::NamedKeyName(name),
+                        package_pointer: InvocablePointer::PackageNamedKeyName(name),
                         entry_point: entry_point.clone(),
                         version,
                         protocol_version_major,

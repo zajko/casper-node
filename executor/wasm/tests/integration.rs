@@ -26,7 +26,7 @@ use casper_executor_wasm_common::error::CallError;
 use casper_executor_wasm_interface::{
     executor::{
         AuctionMethods, ExecuteError, ExecuteRequest, ExecuteWithProviderError, ExecutionKind,
-        FFIMenu, MintMethods, PackagePointer,
+        FFIMenu, MintMethods, InvocablePointer,
     },
     install::{InstallContractError, InstallContractRequest},
 };
@@ -113,7 +113,7 @@ fn vm2_should_return_output_to_caller() {
         .with_gas_limit(DEFAULT_GAS_LIMIT)
         .with_transaction_hash(TRANSACTION_HASH)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(contract_hash.value()),
+            package_pointer: InvocablePointer::PackageHashAddr(contract_hash.value()),
             entry_point: "entry_point_without_state_with_args_and_output".to_string(),
             version: None,
             protocol_version_major: None,
@@ -178,7 +178,7 @@ fn vm2_rollback_should_return_to_caller_with_data() {
         .with_gas_limit(DEFAULT_GAS_LIMIT)
         .with_transaction_hash(TRANSACTION_HASH)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(contract_hash.value()),
+            package_pointer: InvocablePointer::PackageHashAddr(contract_hash.value()),
             entry_point: "emit_rollback_with_data".to_string(),
             version: None,
             protocol_version_major: None,
@@ -244,7 +244,7 @@ fn vm2_revert_should_abort_whole_stack() {
         .with_gas_limit(DEFAULT_GAS_LIMIT)
         .with_transaction_hash(TRANSACTION_HASH)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(contract_hash.value()),
+            package_pointer: InvocablePointer::PackageHashAddr(contract_hash.value()),
             entry_point: "emit_revert".to_string(),
             version: None,
             protocol_version_major: None,
@@ -948,7 +948,7 @@ fn counter() {
         .with_gas_limit(DEFAULT_GAS_LIMIT)
         .with_transaction_hash(TRANSACTION_HASH)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(contract_hash.value()),
+            package_pointer: InvocablePointer::PackageHashAddr(contract_hash.value()),
             entry_point: "increment".to_string(),
             version: None,
             protocol_version_major: None,
@@ -982,7 +982,7 @@ fn counter() {
         .with_gas_limit(DEFAULT_GAS_LIMIT)
         .with_transaction_hash(TRANSACTION_HASH)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(contract_hash.value()),
+            package_pointer: InvocablePointer::PackageHashAddr(contract_hash.value()),
             entry_point: "get".to_string(),
             version: None,
             protocol_version_major: None,
@@ -1045,7 +1045,7 @@ fn counter() {
         .with_gas_limit(DEFAULT_GAS_LIMIT)
         .with_transaction_hash(TRANSACTION_HASH)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(contract_hash.value()),
+            package_pointer: InvocablePointer::PackageHashAddr(contract_hash.value()),
             entry_point: "decrement".to_string(),
             version: None,
             protocol_version_major: None,
@@ -1170,7 +1170,7 @@ fn upgradable() {
     let version_before_upgrade = {
         let execute_request = base_execute_builder(&chainspec_config)
             .with_execution_kind(ExecutionKind::Stored {
-                package_pointer: PackagePointer::HashAddr(upgradable_address),
+                package_pointer: InvocablePointer::PackageHashAddr(upgradable_address),
                 entry_point: "version".to_string(),
                 version: None,
                 protocol_version_major: None,
@@ -1197,7 +1197,7 @@ fn upgradable() {
         // Increment the value
         let execute_request = base_execute_builder(&chainspec_config)
             .with_execution_kind(ExecutionKind::Stored {
-                package_pointer: PackagePointer::HashAddr(upgradable_address),
+                package_pointer: InvocablePointer::PackageHashAddr(upgradable_address),
                 entry_point: "increment".to_string(),
                 version: None,
                 protocol_version_major: None,
@@ -1225,7 +1225,7 @@ fn upgradable() {
     let execute_request = base_execute_builder(&chainspec_config)
         .with_transferred_value(0)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(upgradable_address),
+            package_pointer: InvocablePointer::PackageHashAddr(upgradable_address),
             entry_point: "perform_upgrade".to_string(),
             version: None,
             protocol_version_major: None,
@@ -1249,7 +1249,7 @@ fn upgradable() {
     let version_after_upgrade = {
         let execute_request = base_execute_builder(&chainspec_config)
             .with_execution_kind(ExecutionKind::Stored {
-                package_pointer: PackagePointer::HashAddr(upgradable_address),
+                package_pointer: InvocablePointer::PackageHashAddr(upgradable_address),
                 entry_point: "version".to_string(),
                 version: None,
                 protocol_version_major: None,
@@ -1276,7 +1276,7 @@ fn upgradable() {
         // Increment the value
         let execute_request = base_execute_builder(&chainspec_config)
             .with_execution_kind(ExecutionKind::Stored {
-                package_pointer: PackagePointer::HashAddr(upgradable_address),
+                package_pointer: InvocablePointer::PackageHashAddr(upgradable_address),
                 entry_point: "increment_by".to_string(),
                 version: None,
                 protocol_version_major: None,
@@ -1420,7 +1420,7 @@ fn backwards_compatibility() {
 
     let call_request = base_execute_builder(&chainspec_config)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(proxy_address),
+            package_pointer: InvocablePointer::PackageHashAddr(proxy_address),
             entry_point: "perform_test".to_string(),
             version: None,
             protocol_version_major: None,
@@ -1497,7 +1497,7 @@ fn non_existing_smart_contract_does_not_panic() {
     let non_existing_address = [255; 32];
     let execute_request = base_execute_builder(&chainspec_config)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(non_existing_address),
+            package_pointer: InvocablePointer::PackageHashAddr(non_existing_address),
             entry_point: "non_existing".to_string(),
             version: None,
             protocol_version_major: None,
@@ -1556,7 +1556,7 @@ fn casper_return_writes_to_execution_journal() {
     // Execute the contract to trigger the return
     let execute_request = base_execute_builder(&chainspec_config)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(contract_address),
+            package_pointer: InvocablePointer::PackageHashAddr(contract_address),
             entry_point: "ret".to_string(),
             version: None,
             protocol_version_major: None,
@@ -1649,7 +1649,7 @@ fn casper_return_fails_if_contract_uses_unsupported_flags() {
     // Execute the contract to trigger the return
     let execute_request = base_execute_builder(&chainspec_config)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(contract_address),
+            package_pointer: InvocablePointer::PackageHashAddr(contract_address),
             entry_point: "ret_faulty_flags".to_string(),
             version: None,
             protocol_version_major: None,
@@ -1722,7 +1722,7 @@ fn escrow() {
         .with_gas_limit(DEFAULT_GAS_LIMIT)
         .with_transaction_hash(TRANSACTION_HASH)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(*contract_hash),
+            package_pointer: InvocablePointer::PackageHashAddr(*contract_hash),
             entry_point: "deposit_tokens".to_string(),
             version: None,
             protocol_version_major: None,
@@ -1850,7 +1850,7 @@ fn supports_named_args_convention() {
         .with_gas_limit(DEFAULT_GAS_LIMIT)
         .with_transaction_hash(TRANSACTION_HASH)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(*contract_hash),
+            package_pointer: InvocablePointer::PackageHashAddr(*contract_hash),
             entry_point: "deposit_tokens".to_string(),
             version: None,
             protocol_version_major: None,
@@ -2024,7 +2024,7 @@ fn installing_contract_should_produce_system_messages_after_upgrade() {
     let execute_request = base_execute_builder(&chainspec_config)
         .with_transferred_value(0)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(upgradable_address),
+            package_pointer: InvocablePointer::PackageHashAddr(upgradable_address),
             entry_point: "perform_upgrade".to_string(),
             version: None,
             protocol_version_major: None,
@@ -2152,7 +2152,7 @@ fn calling_upgrade_contract_should_produce_ret_and_call_result() {
     let execute_request = base_execute_builder(&chainspec_config)
         .with_transferred_value(0)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(upgradable_address),
+            package_pointer: InvocablePointer::PackageHashAddr(upgradable_address),
             entry_point: "perform_upgrade".to_string(),
             version: None,
             protocol_version_major: None,
@@ -2329,7 +2329,9 @@ fn contract_calling_different_contract_should_produce_ret_and_call_result() {
         .with_gas_limit(DEFAULT_GAS_LIMIT)
         .with_transaction_hash(TRANSACTION_HASH)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(*caller_create_result.smart_contract_addr()),
+            package_pointer: InvocablePointer::PackageHashAddr(
+                *caller_create_result.smart_contract_addr(),
+            ),
             entry_point: "inc_and_get".to_string(),
             version: None,
             protocol_version_major: None,

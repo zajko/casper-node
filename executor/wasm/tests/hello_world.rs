@@ -10,7 +10,7 @@ use casper_executor_wasm::{
     ExecutorV2,
 };
 use casper_executor_wasm_interface::{
-    executor::{ExecutionKind, PackagePointer},
+    executor::{ExecutionKind, InvocablePointer},
     install::InstallContractWithProviderResult,
 };
 use casper_storage::{
@@ -95,7 +95,7 @@ fn should_store_state_after_changes() {
         .with_shared_address_generator(Arc::clone(&address_generator))
         .with_transferred_value(0)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(contract_address),
+            package_pointer: InvocablePointer::PackageHashAddr(contract_address),
             entry_point: "spanish".to_owned(),
             version: None,
             protocol_version_major: None,
@@ -117,7 +117,7 @@ fn should_store_state_after_changes() {
         .with_shared_address_generator(Arc::clone(&address_generator))
         .with_transferred_value(0)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(contract_address),
+            package_pointer: InvocablePointer::PackageHashAddr(contract_address),
             entry_point: "french".to_owned(),
             version: None,
             protocol_version_major: None,
@@ -180,7 +180,7 @@ fn should_fetch_data_with_contract_method() {
         .with_shared_address_generator(Arc::clone(&address_generator))
         .with_transferred_value(0)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(contract_address),
+            package_pointer: InvocablePointer::PackageHashAddr(contract_address),
             entry_point: "spanish".to_owned(),
             version: None,
             protocol_version_major: None,
@@ -202,7 +202,7 @@ fn should_fetch_data_with_contract_method() {
         .with_shared_address_generator(Arc::clone(&address_generator))
         .with_transferred_value(0)
         .with_execution_kind(ExecutionKind::Stored {
-            package_pointer: PackagePointer::HashAddr(contract_address),
+            package_pointer: InvocablePointer::PackageHashAddr(contract_address),
             entry_point: "get".to_owned(),
             version: None,
             protocol_version_major: None,
