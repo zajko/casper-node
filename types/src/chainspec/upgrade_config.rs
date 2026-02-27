@@ -53,6 +53,7 @@ impl ProtocolUpgradeConfig {
         maximum_delegation_amount: u64,
         minimum_delegation_amount: u64,
         addressable_entity_enabled: bool,
+        minimum_delegation_rate: Option<DelegationRate>,
     ) -> Self {
         ProtocolUpgradeConfig {
             pre_state_hash,
@@ -73,6 +74,7 @@ impl ProtocolUpgradeConfig {
             maximum_delegation_amount,
             minimum_delegation_amount,
             addressable_entity_enabled,
+            minimum_delegation_rate,
         }
     }
 

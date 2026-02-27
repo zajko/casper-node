@@ -339,6 +339,7 @@ impl CoreConfig {
             addressable_entity_enabled: DEFAULT_ENABLE_ENTITY,
             baseline_motes_amount: DEFAULT_BASELINE_MOTES_AMOUNT,
             trap_on_ambiguous_entity_version: false,
+            minimum_delegation_rate: 0,
         }
     }
 }
@@ -386,6 +387,7 @@ impl Default for CoreConfig {
             addressable_entity_enabled: DEFAULT_ENABLE_ENTITY,
             baseline_motes_amount: DEFAULT_BASELINE_MOTES_AMOUNT,
             trap_on_ambiguous_entity_version: false,
+            minimum_delegation_rate: 0,
         }
     }
 }
@@ -481,6 +483,7 @@ impl ToBytes for CoreConfig {
             + self.addressable_entity_enabled.serialized_length()
             + self.baseline_motes_amount.serialized_length()
             + self.trap_on_ambiguous_entity_version.serialized_length()
+            + self.minimum_delegation_rate.serialized_length()
     }
 }
 

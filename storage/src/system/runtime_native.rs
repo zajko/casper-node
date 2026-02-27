@@ -13,7 +13,7 @@ use casper_types::{
 };
 use num_rational::Ratio;
 use parking_lot::RwLock;
-use std::{cell::RefCell, collections::BTreeSet, rc::Rc, sync::Arc, time::Instant};
+use std::{cell::RefCell, collections::BTreeSet, rc::Rc, sync::Arc};
 use tracing::error;
 
 /// Configuration settings.
@@ -613,7 +613,7 @@ where
         self.config.native_transfer_cost
     }
 
-    fn get_minimum_delegation_rate(&self) -> Result<u8, TrackingCopyError> {
+    pub(crate) fn get_minimum_delegation_rate(&self) -> Result<u8, TrackingCopyError> {
         let mut borrow_mut = self.tracking_copy.borrow_mut();
         let key = borrow_mut
             .system_contract_named_key(AUCTION, MINIMUM_DELEGATION_RATE_KEY)?

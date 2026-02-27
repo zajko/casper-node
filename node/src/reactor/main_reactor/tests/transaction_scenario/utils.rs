@@ -514,7 +514,7 @@ impl TestScenarioBuilder {
     }
 
     pub(crate) fn with_minimum_delegation_rate(mut self, minimum_delegation_rate: u8) -> Self {
-        self.minimum_delegation_rate = 0;
+        self.minimum_delegation_rate = minimum_delegation_rate;
         self
     }
 }

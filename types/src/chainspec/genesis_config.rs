@@ -34,7 +34,7 @@ pub struct GenesisConfig {
     gas_hold_interval_millis: u64,
     addressable_entity_enabled: bool,
     storage_costs: StorageCosts,
-    minimum_delegation_rate: Option<DelegationRate>,
+    new_minimum_delegation_rate: Option<DelegationRate>,
 }
 
 impl GenesisConfig {
@@ -54,7 +54,7 @@ impl GenesisConfig {
         gas_hold_interval_millis: u64,
         addressable_entity_enabled: bool,
         storage_costs: StorageCosts,
-        minimum_delegation_rate: Option<DelegationRate>,
+        new_minimum_delegation_rate: Option<DelegationRate>,
     ) -> GenesisConfig {
         GenesisConfig {
             accounts,
@@ -70,7 +70,7 @@ impl GenesisConfig {
             gas_hold_interval_millis,
             addressable_entity_enabled,
             storage_costs,
-            minimum_delegation_rate,
+            new_minimum_delegation_rate,
         }
     }
 
@@ -186,8 +186,8 @@ impl GenesisConfig {
         }
     }
 
-    pub fn minimum_delegation_rate(&self) -> Option<DelegationRate> {
-        self.minimum_delegation_rate
+    pub fn new_minimum_delegation_rate(&self) -> Option<DelegationRate> {
+        self.new_minimum_delegation_rate
     }
 }
 
@@ -219,7 +219,7 @@ impl Distribution<GenesisConfig> for Standard {
         let gas_hold_balance_handling = rng.gen();
         let gas_hold_interval_millis = rng.gen();
         let storage_costs = rng.gen();
-        let minimum_delegation_rate = rng.gen();
+        let new_minimum_delegation_rate = rng.gen();
         GenesisConfig {
             accounts,
             wasm_config,
@@ -234,7 +234,7 @@ impl Distribution<GenesisConfig> for Standard {
             gas_hold_interval_millis,
             addressable_entity_enabled: false,
             storage_costs,
-            minimum_delegation_rate,
+            new_minimum_delegation_rate,
         }
     }
 }
@@ -263,7 +263,7 @@ impl From<&Chainspec> for GenesisConfig {
             gas_hold_interval_millis,
             addressable_entity_enabled: chainspec.core_config.addressable_entity_enabled,
             storage_costs,
-            minimum_delegation_rate: chainspec.core_config.minimum_delegation_rate,
+            new_minimum_delegation_rate: Some(chainspec.core_config.minimum_delegation_rate),
         }
     }
 }

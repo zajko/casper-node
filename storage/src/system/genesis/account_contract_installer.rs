@@ -13,7 +13,7 @@ use crate::{
     global_state::state::StateProvider,
     system::{
         genesis::{GenesisError, DEFAULT_ADDRESS, NO_WASM},
-        protocol_upgrade::{blake2b, ProtocolUpgradeError},
+        protocol_upgrade::blake2b,
     },
     AddressGenerator, TrackingCopy, MESSAGING_CONTRACT_ADDR_TOPIC,
     MESSAGING_CONTRACT_BYTECODE_ADDR_TOPIC, MESSAGING_CONTRACT_VERSION_TOPIC,
@@ -262,14 +262,18 @@ where
 
         let cl_value = CLValue::from_t(minimum_delegation_rate)
             .map_err(|cl_error| GenesisError::CLValue(cl_error.to_string()))?;
-        let stored_value = StoredValue::CLValue(cl_value);
-        let auction_addr = EntityAddr::System(auction);
-        self.system_uref(
-            auction_addr,
-            MINIMUM_DELEGATION_RATE_KEY,
-            &named_keys,
-            stored_value,
-        )?;
+        let minimum_delegation_rate_uref = self
+            .address_generator
+            .borrow_mut()
+            .new_uref(AccessRights::READ_ADD_WRITE);
+        self.tracking_copy.borrow_mut().write(
+            minimum_delegation_rate_uref.into(),
+            StoredValue::CLValue(cl_value),
+        );
+        named_keys.insert(
+            MINIMUM_DELEGATION_RATE_KEY.into(),
+            minimum_delegation_rate_uref.into(),
+        );
 
         let genesis_validators: Vec<_> = self.config.get_bonded_validators().collect();
         if (self.config.validator_slots() as usize) < genesis_validators.len() {
@@ -816,7 +820,8 @@ where
         self.create_accounts(total_supply_key, payment_purse_uref)?;
 
         // Create the auction and setup the stake of all genesis validators.
-        let auction = self.create_auction(total_supply_key, minimum_delegation_rate)?;
+        let minimum_delegation_rate = self.config.new_minimum_delegation_rate().unwrap_or(0);
+        self.create_auction(total_supply_key, minimum_delegation_rate)?;
 
         // Create handle payment
         self.create_handle_payment(payment_purse_uref)?;
@@ -831,31 +836,5 @@ where
         self.create_messaging_topics(BlockTime::new(self.config.genesis_timestamp_millis()))?;
 
         Ok(())
-    }
-
-    fn system_uref(
-        &mut self,
-        entity_addr: EntityAddr,
-        name: &str,
-        named_keys: &NamedKeys,
-        stored_value: StoredValue,
-    ) -> Result<(), ProtocolUpgradeError> {
-        let uref = {
-            match named_keys.get(name) {
-                Some(key) => match key.as_uref() {
-                    Some(uref) => *uref,
-                    None => {
-                        return Err(ProtocolUpgradeError::UnexpectedKeyVariant);
-                    }
-                },
-                None => self
-                    .address_generator
-                    .borrow_mut()
-                    .new_uref(AccessRights::READ_ADD_WRITE),
-            }
-        };
-        self.tracking_copy
-            .upsert_uref_to_named_keys(entity_addr, name, named_keys, uref, stored_value)
-            .map_err(ProtocolUpgradeError::TrackingCopy)
     }
 }

@@ -4844,8 +4844,10 @@ where
             )?;
         let stored_value = self
             .context
-            .read_gs(minimum_delegation_rate_key)?
-            .ok_or(ExecError::KeyNotFound)?;
+            .state()
+            .borrow_mut()
+            .read(minimum_delegation_rate_key)?
+            .ok_or_else(|| ExecError::KeyNotFound(*minimum_delegation_rate_key))?;
         if let StoredValue::CLValue(cl_value) = stored_value {
             let minimum_delegation_rate: u8 = cl_value.into_t().map_err(ExecError::CLValue)?;
             Ok(minimum_delegation_rate)
