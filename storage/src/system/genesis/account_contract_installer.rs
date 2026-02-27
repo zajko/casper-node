@@ -32,12 +32,13 @@ use casper_types::{
     execution::Effects,
     system::{
         auction::{
-            self, BidAddr, BidKind, Delegator, DelegatorBid, DelegatorKind, SeigniorageRecipient,
-            SeigniorageRecipientV2, SeigniorageRecipients, SeigniorageRecipientsSnapshot,
-            SeigniorageRecipientsSnapshotV2, SeigniorageRecipientsV2, Staking, ValidatorBid,
-            AUCTION_DELAY_KEY, DEFAULT_SEIGNIORAGE_RECIPIENTS_SNAPSHOT_VERSION,
-            DELEGATION_RATE_DENOMINATOR, ERA_END_TIMESTAMP_MILLIS_KEY, ERA_ID_KEY,
-            INITIAL_ERA_END_TIMESTAMP_MILLIS, INITIAL_ERA_ID, LOCKED_FUNDS_PERIOD_KEY,
+            self, BidAddr, BidKind, DelegationRate, Delegator, DelegatorBid, DelegatorKind,
+            SeigniorageRecipient, SeigniorageRecipientV2, SeigniorageRecipients,
+            SeigniorageRecipientsSnapshot, SeigniorageRecipientsSnapshotV2,
+            SeigniorageRecipientsV2, Staking, ValidatorBid, AUCTION_DELAY_KEY,
+            DEFAULT_SEIGNIORAGE_RECIPIENTS_SNAPSHOT_VERSION, DELEGATION_RATE_DENOMINATOR,
+            ERA_END_TIMESTAMP_MILLIS_KEY, ERA_ID_KEY, INITIAL_ERA_END_TIMESTAMP_MILLIS,
+            INITIAL_ERA_ID, LOCKED_FUNDS_PERIOD_KEY, MINIMUM_DELEGATION_RATE_KEY,
             SEIGNIORAGE_RECIPIENTS_SNAPSHOT_KEY, SEIGNIORAGE_RECIPIENTS_SNAPSHOT_VERSION_KEY,
             UNBONDING_DELAY_KEY, VALIDATOR_SLOTS_KEY,
         },
@@ -248,12 +249,27 @@ where
         Ok(handle_payment_hash.value())
     }
 
-    fn create_auction(&self, total_supply_key: Key) -> Result<HashAddr, Box<GenesisError>> {
+    fn create_auction(
+        &self,
+        total_supply_key: Key,
+        minimum_delegation_rate: DelegationRate,
+    ) -> Result<HashAddr, Box<GenesisError>> {
         let locked_funds_period_millis = self.config.locked_funds_period_millis();
         let auction_delay: u64 = self.config.auction_delay();
         let genesis_timestamp_millis: u64 = self.config.genesis_timestamp_millis();
 
         let mut named_keys = NamedKeys::new();
+
+        let cl_value = CLValue::from_t(minimum_delegation_rate)
+            .map_err(|cl_error| GenesisError::CLValue(cl_error.to_string()))?;
+        let stored_value = StoredValue::CLValue(cl_value);
+        let auction_addr = EntityAddr::System(auction);
+        self.system_uref(
+            auction_addr,
+            MINIMUM_DELEGATION_RATE_KEY,
+            &named_keys,
+            stored_value,
+        )?;
 
         let genesis_validators: Vec<_> = self.config.get_bonded_validators().collect();
         if (self.config.validator_slots() as usize) < genesis_validators.len() {
@@ -800,7 +816,7 @@ where
         self.create_accounts(total_supply_key, payment_purse_uref)?;
 
         // Create the auction and setup the stake of all genesis validators.
-        self.create_auction(total_supply_key)?;
+        let auction = self.create_auction(total_supply_key, minimum_delegation_rate)?;
 
         // Create handle payment
         self.create_handle_payment(payment_purse_uref)?;
@@ -813,6 +829,33 @@ where
 
         // Create handle payment
         self.create_messaging_topics(BlockTime::new(self.config.genesis_timestamp_millis()))?;
+
         Ok(())
+    }
+
+    fn system_uref(
+        &mut self,
+        entity_addr: EntityAddr,
+        name: &str,
+        named_keys: &NamedKeys,
+        stored_value: StoredValue,
+    ) -> Result<(), ProtocolUpgradeError> {
+        let uref = {
+            match named_keys.get(name) {
+                Some(key) => match key.as_uref() {
+                    Some(uref) => *uref,
+                    None => {
+                        return Err(ProtocolUpgradeError::UnexpectedKeyVariant);
+                    }
+                },
+                None => self
+                    .address_generator
+                    .borrow_mut()
+                    .new_uref(AccessRights::READ_ADD_WRITE),
+            }
+        };
+        self.tracking_copy
+            .upsert_uref_to_named_keys(entity_addr, name, named_keys, uref, stored_value)
+            .map_err(ProtocolUpgradeError::TrackingCopy)
     }
 }

@@ -1130,6 +1130,39 @@ async fn vm2_contract_calling_by_hash_with_addressable_entity_after_upgrade() {
         .await;
 }
 
+#[tokio::test]
+async fn native_add_bid_should_fail_when_minimum_delegation_rate_not_met() {
+    let mut test_scenario = TestScenarioBuilder::new()
+        .with_minimum_delegation_rate(20)
+        .build(&mut rng)
+        .await;
+    let chain_name = test_scenario.chain_name();
+    test_scenario.setup().await.unwrap();
+    let mut txn: Transaction = Transaction::from(
+        TransactionV1Builder::new_add_bid(
+            ALICE_PUBLIC_KEY.clone(),
+            19,
+            100_000_000_000_u64,
+            None,
+            None,
+            None,
+        )
+        .with_initiator_addr(PublicKey::from(ALICE_SECRET_KEY.as_ref()))
+        .with_pricing_mode(PricingMode::PaymentLimited {
+            payment_amount: 100_000_000_000_u64,
+            gas_price_tolerance: 1,
+            standard_payment: true,
+        })
+        .with_chain_name(chain_name.clone())
+        .build()
+        .unwrap(),
+    );
+    txn.sign(&ALICE_SECRET_KEY);
+    let hash = txn.hash();
+    let execution_infos = test_scenario.run(vec![txn]).await.unwrap();
+    test_scenario.assert(TransactionSuccessful::new(hash)).await;
+}
+
 fn peel_package_hash_info(execution_infos: Vec<ExecutionInfo>) -> [u8; 32] {
     let ei = execution_infos
         .first()

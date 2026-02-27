@@ -191,6 +191,9 @@ pub struct CoreConfig {
     /// The flag on whether the engine will return an error for multiple
     /// entity versions.
     pub trap_on_ambiguous_entity_version: bool,
+    /// Minimum delegation rate a validator can specify.
+    /// Also applies to delegation reservations.
+    pub minimum_delegation_rate: u8,
 }
 
 impl CoreConfig {
@@ -432,6 +435,7 @@ impl ToBytes for CoreConfig {
         buffer.extend(self.addressable_entity_enabled.to_bytes()?);
         buffer.extend(self.baseline_motes_amount.to_bytes()?);
         buffer.extend(self.trap_on_ambiguous_entity_version.to_bytes()?);
+        buffer.extend(self.minimum_delegation_rate.to_bytes()?);
         Ok(buffer)
     }
 
@@ -522,6 +526,7 @@ impl FromBytes for CoreConfig {
         let (addressable_entity_enabled, remainder) = FromBytes::from_bytes(remainder)?;
         let (baseline_motes_amount, remainder) = u64::from_bytes(remainder)?;
         let (trap_on_ambiguous_entity_version, remainder) = bool::from_bytes(remainder)?;
+        let (minimum_delegation_rate, remainder) = u8::from_bytes(remainder)?;
         let config = CoreConfig {
             era_duration,
             minimum_era_height,
@@ -562,6 +567,7 @@ impl FromBytes for CoreConfig {
             addressable_entity_enabled,
             baseline_motes_amount,
             trap_on_ambiguous_entity_version,
+            minimum_delegation_rate,
         };
         Ok((config, remainder))
     }
