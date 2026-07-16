@@ -39,7 +39,7 @@ const STORAGE_DB_FILENAME: &str = "storage.lmdb";
 const MAX_TRANSACTIONS: u32 = 5;
 
 /// Maximum number of allowed dbs.
-const MAX_DB_COUNT: u32 = 17;
+const MAX_DB_COUNT: u32 = 20;
 
 /// OS-specific lmdb flags.
 #[cfg(not(target_os = "macos"))]
@@ -80,6 +80,16 @@ pub struct LmdbBlockStore {
     /// The finalized transaction approvals databases.
     pub(super) finalized_transaction_approvals_dbs:
         VersionedDatabases<TransactionHash, BTreeSet<Approval>>,
+    /// Disk-backed index of block height to block hash.
+    #[data_size(skip)]
+    pub(super) block_height_index_db: Database,
+    /// Disk-backed index of era ID to switch block hash.
+    #[data_size(skip)]
+    pub(super) switch_block_era_id_index_db: Database,
+    /// Disk-backed index of transaction hash to the hash, height and era of the block containing
+    /// it.
+    #[data_size(skip)]
+    pub(super) transaction_hash_index_db: Database,
 }
 
 impl LmdbBlockStore {
@@ -114,6 +124,16 @@ impl LmdbBlockStore {
             VersionedDatabases::new(&env, "approvals_hashes", "versioned_approvals_hashes")
                 .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
 
+        let block_height_index_db = env
+            .create_db(Some("block_height_index"), DatabaseFlags::empty())
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
+        let switch_block_era_id_index_db = env
+            .create_db(Some("switch_block_era_id_index"), DatabaseFlags::empty())
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
+        let transaction_hash_index_db = env
+            .create_db(Some("transaction_hash_index"), DatabaseFlags::empty())
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
+
         Ok(Self {
             root: root_path.to_path_buf(),
             env: Arc::new(env),
@@ -126,6 +146,9 @@ impl LmdbBlockStore {
             transfer_dbs,
             state_store_db,
             finalized_transaction_approvals_dbs,
+            block_height_index_db,
+            switch_block_era_id_index_db,
+            transaction_hash_index_db,
         })
     }
 

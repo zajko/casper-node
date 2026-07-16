@@ -16,6 +16,9 @@ const_assert!(_STORAGE_EVENT_SIZE <= 32);
 #[derive(Debug, From, Serialize)]
 #[repr(u8)]
 pub(crate) enum Event {
+    /// Initializing event, triggers the (chainspec-gated) hard-reset prune and completed-blocks
+    /// bookkeeping.
+    Initialize,
     /// Storage request.
     #[from]
     StorageRequest(Box<StorageRequest>),
@@ -32,6 +35,7 @@ pub(crate) enum Event {
 impl Display for Event {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Event::Initialize => write!(f, "initialize"),
             Event::StorageRequest(req) => req.fmt(f),
             Event::NetRequestIncoming(incoming) => incoming.fmt(f),
             Event::MarkBlockCompletedRequest(req) => req.fmt(f),

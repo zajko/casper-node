@@ -34,7 +34,7 @@ use casper_types::{
     execution::ExecutionResult, Approval, AvailableBlockRange, Block, BlockHash, BlockHeader,
     BlockSignatures, BlockSynchronizerStatus, BlockV2, ChainspecRawBytes, DeployHash, Digest,
     DisplayIter, EntityAddr, EraId, ExecutionInfo, FinalitySignature, FinalitySignatureId,
-    HashAddr, NextUpgrade, ProtocolUpgradeConfig, PublicKey, TimeDiff, Timestamp, Transaction,
+    HashAddr, NextUpgrade, PublicKey, TimeDiff, Timestamp, Transaction,
     TransactionHash, TransactionId, Transfer,
 };
 
@@ -53,7 +53,6 @@ use crate::{
         network::NetworkInsights,
         transaction_acceptor,
     },
-    contract_runtime::ExecutionPreState,
     reactor::main_reactor::ReactorState,
     types::{
         appendable_block::AppendableBlock, BlockExecutionResultsOrChunk,
@@ -888,15 +887,6 @@ pub(crate) enum ContractRuntimeRequest {
         era_id: EraId,
         responder: Responder<Option<u8>>,
     },
-    DoProtocolUpgrade {
-        protocol_upgrade_config: ProtocolUpgradeConfig,
-        next_block_height: u64,
-        parent_hash: BlockHash,
-        parent_seed: Digest,
-    },
-    UpdatePreState {
-        new_pre_state: ExecutionPreState,
-    },
 }
 
 impl Display for ContractRuntimeRequest {
@@ -989,23 +979,6 @@ impl Display for ContractRuntimeRequest {
                     formatter,
                     "get entry point {}-{} under {}",
                     formatted_contract_hash, entry_point_name, state_root_hash
-                )
-            }
-            ContractRuntimeRequest::DoProtocolUpgrade {
-                protocol_upgrade_config,
-                ..
-            } => {
-                write!(
-                    formatter,
-                    "execute protocol upgrade against config: {:?}",
-                    protocol_upgrade_config
-                )
-            }
-            ContractRuntimeRequest::UpdatePreState { new_pre_state } => {
-                write!(
-                    formatter,
-                    "Updating contract runtimes execution prestate: {:?}",
-                    new_pre_state
                 )
             }
         }

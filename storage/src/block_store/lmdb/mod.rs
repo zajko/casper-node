@@ -1,5 +1,4 @@
 mod lmdb_ext;
-mod temp_map;
 mod versioned_databases;
 
 mod indexed_lmdb_block_store;

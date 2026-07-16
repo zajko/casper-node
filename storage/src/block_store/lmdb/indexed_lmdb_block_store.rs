@@ -1,19 +1,19 @@
 use std::{
     borrow::Cow,
-    collections::{btree_map, hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{btree_map, BTreeMap, BTreeSet},
 };
 
-use super::{
-    lmdb_block_store::LmdbBlockStore, lmdb_ext::LmdbExtError, temp_map::TempMap, DbTableId,
-};
+use super::{lmdb_block_store::LmdbBlockStore, lmdb_ext::LmdbExtError, DbTableId};
 use datasize::DataSize;
-use lmdb::{
-    Environment, RoTransaction, RwCursor, RwTransaction, Transaction as LmdbTransaction, WriteFlags,
-};
+use lmdb::{RoTransaction, RwCursor, RwTransaction, Transaction as LmdbTransaction};
 
 use tracing::info;
 
-use super::versioned_databases::VersionedDatabases;
+use super::lmdb_ext::{
+    append_by_be_u64_key, append_value_bytesrepr, delete_by_be_u64_key, delete_value_bytesrepr,
+    get_by_be_u64_key, get_last_by_be_u64_key, put_by_be_u64_key, TransactionExt,
+    WriteTransactionExt,
+};
 use crate::block_store::{
     block_provider::{BlockStoreTransaction, DataReader, DataWriter},
     types::{
@@ -24,7 +24,7 @@ use crate::block_store::{
 };
 use casper_types::{
     execution::ExecutionResult, Approval, Block, BlockBody, BlockHash, BlockHeader,
-    BlockSignatures, Digest, EraId, ProtocolVersion, Transaction, TransactionHash, Transfer,
+    BlockSignatures, Digest, EraId, Transaction, TransactionHash, Transfer,
 };
 
 /// Indexed lmdb block store.
@@ -32,12 +32,6 @@ use casper_types::{
 pub struct IndexedLmdbBlockStore {
     /// Block store
     block_store: LmdbBlockStore,
-    /// A map of block height to block ID.
-    block_height_index: BTreeMap<u64, BlockHash>,
-    /// A map of era ID to switch block ID.
-    switch_block_era_id_index: BTreeMap<EraId, BlockHash>,
-    /// A map of transaction hashes to hashes, heights and era IDs of blocks containing them.
-    transaction_hash_index: BTreeMap<TransactionHash, BlockHashHeightAndEra>,
 }
 
 impl IndexedLmdbBlockStore {
@@ -125,56 +119,82 @@ impl IndexedLmdbBlockStore {
         Ok(())
     }
 
-    /// Ctor.
-    pub fn new(
-        block_store: LmdbBlockStore,
-        hard_reset_to_start_of_era: Option<EraId>,
-        protocol_version: ProtocolVersion,
-    ) -> Result<IndexedLmdbBlockStore, BlockStoreError> {
-        // We now need to restore the block-height index. Log messages allow timing here.
-        info!("indexing block store");
+    /// ctor
+    pub fn new(block_store: LmdbBlockStore) -> IndexedLmdbBlockStore {
+        IndexedLmdbBlockStore { block_store }
+    }
+
+    /// Initializes the disk-backed indexes. This operation can be time
+    /// consuming because it needs to go through all entries in block
+    /// headers db. If the index has data it assumes that no reindexing
+    /// is needed.
+    pub fn init(&mut self) -> Result<(), BlockStoreError> {
+        let block_store = &self.block_store;
+
+        let ro_txn = block_store
+            .env
+            .begin_ro_txn()
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
+        let index_is_empty = ro_txn
+            .stat(block_store.block_height_index_db)
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?
+            .entries()
+            == 0;
+        let headers_exist = header_count(&ro_txn, block_store)? > 0;
+        ro_txn
+            .commit()
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
+
+        if headers_exist && index_is_empty {
+            info!("block store indexes appear to be missing; building them from a full scan");
+            self.rebuild_indexes()?;
+        }
+
+        Ok(())
+    }
+
+    /// Performs an unconditional one-off full rebuild of the disk-backed block-height/
+    /// switch-block-era-id/transaction-hash indexes, by scanning every block header currently in
+    /// storage. Exposed for tests; startup code should use [`Self::init`], which only rebuilds
+    /// when necessary.
+    #[cfg(test)]
+    pub fn reindex(&mut self) -> Result<(), BlockStoreError> {
+        self.rebuild_indexes()
+    }
+
+    fn rebuild_indexes(&mut self) -> Result<(), BlockStoreError> {
+        let block_store = &self.block_store;
+
+        info!("reindexing block store");
+
         let mut block_height_index = BTreeMap::new();
         let mut switch_block_era_id_index = BTreeMap::new();
         let mut transaction_hash_index = BTreeMap::new();
+
         let mut block_txn = block_store
             .env
             .begin_rw_txn()
             .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
 
-        let mut deleted_block_hashes = HashSet::new();
-        // Map of all block body hashes, with their values representing whether to retain the
-        // corresponding block bodies or not.
-        let mut block_body_hashes = HashMap::new();
-        let mut deleted_transaction_hashes = HashSet::<TransactionHash>::new();
+        let total_headers = header_count(&block_txn, block_store)?;
+        let progress_step = (total_headers / 20).max(1);
+        let mut processed: usize = 0;
 
         let mut init_fn =
-            |cursor: &mut RwCursor, block_header: BlockHeader| -> Result<(), BlockStoreError> {
-                let should_retain_block = match hard_reset_to_start_of_era {
-                    Some(invalid_era) => {
-                        // Retain blocks from eras before the hard reset era, and blocks after this
-                        // era if they are from the current protocol version (as otherwise a node
-                        // restart would purge them again, despite them being valid).
-                        block_header.era_id() < invalid_era
-                            || block_header.protocol_version() == protocol_version
-                    }
-                    None => true,
-                };
-
-                // If we don't already have the block body hash in the collection, insert it with
-                // the value `should_retain_block`.
-                //
-                // If there is an existing value, the updated value should be `false` iff the
-                // existing value and `should_retain_block` are both `false`.
-                // Otherwise the updated value should be `true`.
-                match block_body_hashes.entry(*block_header.body_hash()) {
-                    Entry::Vacant(entry) => {
-                        entry.insert(should_retain_block);
-                    }
-                    Entry::Occupied(entry) => {
-                        let value = entry.into_mut();
-                        *value = *value || should_retain_block;
-                    }
+            |_cursor: &mut RwCursor, block_header: BlockHeader| -> Result<(), BlockStoreError> {
+                processed += 1;
+                if processed % progress_step == 0 {
+                    info!(
+                        percent_complete = (processed * 100 / total_headers.max(1)),
+                        processed, total_headers, "reindexing block store"
+                    );
                 }
+
+                Self::insert_to_block_header_indices(
+                    &mut block_height_index,
+                    &mut switch_block_era_id_index,
+                    &block_header,
+                )?;
 
                 let body_txn = block_store
                     .env
@@ -184,42 +204,8 @@ impl IndexedLmdbBlockStore {
                     .block_body_dbs
                     .get(&body_txn, block_header.body_hash())
                     .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
-                if !should_retain_block {
-                    let _ = deleted_block_hashes.insert(block_header.block_hash());
-
-                    match &maybe_block_body {
-                        Some(BlockBody::V1(v1_body)) => deleted_transaction_hashes.extend(
-                            v1_body
-                                .deploy_and_transfer_hashes()
-                                .map(TransactionHash::from),
-                        ),
-                        Some(BlockBody::V2(v2_body)) => {
-                            let transactions = v2_body.all_transactions();
-                            deleted_transaction_hashes.extend(transactions)
-                        }
-                        None => (),
-                    }
-
-                    cursor
-                        .del(WriteFlags::empty())
-                        .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
-                    return Ok(());
-                }
-
-                Self::insert_to_block_header_indices(
-                    &mut block_height_index,
-                    &mut switch_block_era_id_index,
-                    &block_header,
-                )?;
-
-                if let Some(block_body) = maybe_block_body {
-                    let transaction_hashes = match block_body {
-                        BlockBody::V1(v1) => v1
-                            .deploy_and_transfer_hashes()
-                            .map(TransactionHash::from)
-                            .collect(),
-                        BlockBody::V2(v2) => v2.all_transactions().copied().collect(),
-                    };
+                if let Some(block_body) = &maybe_block_body {
+                    let transaction_hashes = block_transaction_hashes(block_body);
                     Self::insert_to_transaction_index(
                         &mut transaction_hash_index,
                         block_header.block_hash(),
@@ -239,113 +225,99 @@ impl IndexedLmdbBlockStore {
             .block_header_dbs
             .for_each_value_in_legacy(&mut block_txn, &mut init_fn)?;
 
-        info!("block store reindexing complete");
-        block_txn
+        // The scan above makes no changes to the header dbs (unlike `prune`), so this can just be
+        // rolled back rather than committed.
+        block_txn.abort();
+
+        let mut index_txn = block_store
+            .env
+            .begin_rw_txn()
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
+
+        index_txn
+            .clear_db(block_store.block_height_index_db)
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
+        index_txn
+            .clear_db(block_store.switch_block_era_id_index_db)
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
+        index_txn
+            .clear_db(block_store.transaction_hash_index_db)
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
+
+        // `block_height_index`/`switch_block_era_id_index`/`transaction_hash_index` are
+        // `BTreeMap`s, so iterating them yields ascending key order; combined with the `clear_db`
+        // calls above, this lets us use LMDB's `APPEND` flag to skip the usual B-tree
+        // search/rebalance per insert (a significant speedup for a full rebuild). This is safe
+        // because: the two `u64`/`EraId`-keyed indexes use `append_by_be_u64_key`, whose
+        // big-endian key encoding is specifically chosen so ascending numeric order is ascending
+        // byte order; and `TransactionHash`'s derived `Ord` (variant tag, then digest bytes)
+        // matches its `bytesrepr` encoding (tag byte, then raw digest bytes) byte-for-byte.
+        for (height, block_hash) in block_height_index {
+            append_by_be_u64_key(
+                &mut index_txn,
+                block_store.block_height_index_db,
+                height,
+                &block_hash,
+            )
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
+        }
+        for (era_id, block_hash) in switch_block_era_id_index {
+            append_by_be_u64_key(
+                &mut index_txn,
+                block_store.switch_block_era_id_index_db,
+                era_id.value(),
+                &block_hash,
+            )
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
+        }
+        for (transaction_hash, block_info) in transaction_hash_index {
+            append_value_bytesrepr(
+                &mut index_txn,
+                block_store.transaction_hash_index_db,
+                &transaction_hash,
+                &block_info,
+            )
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
+        }
+
+        index_txn
             .commit()
             .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
 
-        let deleted_block_body_hashes = block_body_hashes
-            .into_iter()
-            .filter_map(|(body_hash, retain)| (!retain).then_some(body_hash))
-            .collect();
-        initialize_block_body_dbs(
-            &block_store.env,
-            block_store.block_body_dbs,
-            deleted_block_body_hashes,
-        )?;
-        initialize_block_metadata_dbs(
-            &block_store.env,
-            block_store.block_metadata_dbs,
-            deleted_block_hashes,
-        )?;
-        initialize_execution_result_dbs(
-            &block_store.env,
-            block_store.execution_result_dbs,
-            deleted_transaction_hashes,
-        )
-        .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
-
-        Ok(Self {
-            block_store,
-            block_height_index,
-            switch_block_era_id_index,
-            transaction_hash_index,
-        })
+        info!("block store reindexing complete");
+        Ok(())
     }
 }
 
-/// Purges stale entries from the block body databases.
-fn initialize_block_body_dbs(
-    env: &Environment,
-    block_body_dbs: VersionedDatabases<Digest, BlockBody>,
-    deleted_block_body_hashes: HashSet<Digest>,
-) -> Result<(), BlockStoreError> {
-    info!("initializing block body databases");
-    let mut txn = env
-        .begin_rw_txn()
-        .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
-    for body_hash in deleted_block_body_hashes {
-        block_body_dbs
-            .delete(&mut txn, &body_hash)
-            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
-    }
-    txn.commit()
-        .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
-    info!("block body database initialized");
-    Ok(())
+fn header_count<Tx: LmdbTransaction>(
+    txn: &Tx,
+    block_store: &LmdbBlockStore,
+) -> Result<usize, BlockStoreError> {
+    let current = txn
+        .stat(block_store.block_header_dbs.current)
+        .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?
+        .entries();
+    let legacy = txn
+        .stat(block_store.block_header_dbs.legacy)
+        .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?
+        .entries();
+    Ok(current + legacy)
 }
 
-/// Purges stale entries from the block metadata database.
-fn initialize_block_metadata_dbs(
-    env: &Environment,
-    block_metadata_dbs: VersionedDatabases<BlockHash, BlockSignatures>,
-    deleted_block_hashes: HashSet<BlockHash>,
-) -> Result<(), BlockStoreError> {
-    let block_count_to_be_deleted = deleted_block_hashes.len();
-    info!(
-        block_count_to_be_deleted,
-        "initializing block metadata database"
-    );
-    let mut txn = env
-        .begin_rw_txn()
-        .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
-    for block_hash in deleted_block_hashes {
-        block_metadata_dbs
-            .delete(&mut txn, &block_hash)
-            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?
+/// Returns the transaction hashes referenced by a block body.
+fn block_transaction_hashes(block_body: &BlockBody) -> Vec<TransactionHash> {
+    match block_body {
+        BlockBody::V1(v1) => v1
+            .deploy_and_transfer_hashes()
+            .map(TransactionHash::from)
+            .collect(),
+        BlockBody::V2(v2) => v2.all_transactions().copied().collect(),
     }
-    txn.commit()
-        .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
-    info!("block metadata database initialized");
-    Ok(())
-}
-
-/// Purges stale entries from the execution result databases.
-fn initialize_execution_result_dbs(
-    env: &Environment,
-    execution_result_dbs: VersionedDatabases<TransactionHash, ExecutionResult>,
-    deleted_transaction_hashes: HashSet<TransactionHash>,
-) -> Result<(), LmdbExtError> {
-    let exec_results_count_to_be_deleted = deleted_transaction_hashes.len();
-    info!(
-        exec_results_count_to_be_deleted,
-        "initializing execution result databases"
-    );
-    let mut txn = env.begin_rw_txn()?;
-    for hash in deleted_transaction_hashes {
-        execution_result_dbs.delete(&mut txn, &hash)?;
-    }
-    txn.commit()?;
-    info!("execution result databases initialized");
-    Ok(())
 }
 
 pub struct IndexedLmdbBlockStoreRWTransaction<'t> {
     txn: RwTransaction<'t>,
     block_store: &'t LmdbBlockStore,
-    block_height_index: TempMap<'t, u64, BlockHash>,
-    switch_block_era_id_index: TempMap<'t, EraId, BlockHash>,
-    transaction_hash_index: TempMap<'t, TransactionHash, BlockHashHeightAndEra>,
 }
 
 impl IndexedLmdbBlockStoreRWTransaction<'_> {
@@ -355,21 +327,23 @@ impl IndexedLmdbBlockStoreRWTransaction<'_> {
         block_height: u64,
         block_hash: &BlockHash,
     ) -> Result<bool, BlockStoreError> {
-        if let Some(first) = self.block_height_index.get(&block_height) {
+        match get_by_be_u64_key::<_, BlockHash>(
+            &self.txn,
+            self.block_store.block_height_index_db,
+            block_height,
+        )
+        .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?
+        {
             // There is a block in the index at this height
-            if first != *block_hash {
-                Err(BlockStoreError::DuplicateBlock {
-                    height: block_height,
-                    first,
-                    second: *block_hash,
-                })
-            } else {
-                // Same value already in index, no need to update it.
-                Ok(false)
-            }
-        } else {
+            Some(first) if first != *block_hash => Err(BlockStoreError::DuplicateBlock {
+                height: block_height,
+                first,
+                second: *block_hash,
+            }),
+            // Same value already in index, no need to update it.
+            Some(_) => Ok(false),
             // Value not in index, update.
-            Ok(true)
+            None => Ok(true),
         }
     }
 
@@ -378,27 +352,28 @@ impl IndexedLmdbBlockStoreRWTransaction<'_> {
         &self,
         block_header: &BlockHeader,
     ) -> Result<bool, BlockStoreError> {
-        if block_header.is_switch_block() {
-            let era_id = block_header.era_id();
-            if let Some(entry) = self.switch_block_era_id_index.get(&era_id) {
-                let block_hash = block_header.block_hash();
-                if entry != block_hash {
-                    Err(BlockStoreError::DuplicateEraId {
-                        era_id,
-                        first: entry,
-                        second: block_hash,
-                    })
-                } else {
-                    // already in index, no need to update.
-                    Ok(false)
-                }
-            } else {
-                // not in the index, update.
-                Ok(true)
+        if !block_header.is_switch_block() {
+            return Ok(false);
+        }
+        let era_id = block_header.era_id();
+        match get_by_be_u64_key::<_, BlockHash>(
+            &self.txn,
+            self.block_store.switch_block_era_id_index_db,
+            era_id.value(),
+        )
+        .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?
+        {
+            Some(entry) if entry != block_header.block_hash() => {
+                Err(BlockStoreError::DuplicateEraId {
+                    era_id,
+                    first: entry,
+                    second: block_header.block_hash(),
+                })
             }
-        } else {
-            // not a switch block.
-            Ok(false)
+            // already in index, no need to update.
+            Some(_) => Ok(false),
+            // not in the index, update.
+            None => Ok(true),
         }
     }
 
@@ -408,16 +383,23 @@ impl IndexedLmdbBlockStoreRWTransaction<'_> {
         transaction_hashes: &[TransactionHash],
         block_hash: &BlockHash,
     ) -> Result<bool, BlockStoreError> {
-        if let Some(hash) = transaction_hashes.iter().find(|hash| {
-            self.transaction_hash_index
-                .get(hash)
-                .is_some_and(|old_details| old_details.block_hash != *block_hash)
-        }) {
-            return Err(BlockStoreError::DuplicateTransaction {
-                transaction_hash: *hash,
-                first: self.transaction_hash_index.get(hash).unwrap().block_hash,
-                second: *block_hash,
-            });
+        for hash in transaction_hashes {
+            if let Some(old_details) = self
+                .txn
+                .get_value_bytesrepr::<_, BlockHashHeightAndEra>(
+                    self.block_store.transaction_hash_index_db,
+                    hash,
+                )
+                .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?
+            {
+                if old_details.block_hash != *block_hash {
+                    return Err(BlockStoreError::DuplicateTransaction {
+                        transaction_hash: *hash,
+                        first: old_details.block_hash,
+                        second: *block_hash,
+                    });
+                }
+            }
         }
         Ok(true)
     }
@@ -446,75 +428,87 @@ enum DataType {
 }
 
 impl IndexedLmdbBlockStoreReadTransaction<'_> {
-    fn block_hash_from_index(&self, index: LmdbBlockStoreIndex) -> Option<&BlockHash> {
-        match index {
+    fn block_hash_from_index(
+        &self,
+        index: LmdbBlockStoreIndex,
+    ) -> Result<Option<BlockHash>, BlockStoreError> {
+        let result = match index {
             LmdbBlockStoreIndex::BlockHeight(position) => match position {
-                IndexPosition::Tip => self.block_store.block_height_index.values().last(),
-                IndexPosition::Key(height) => self.block_store.block_height_index.get(&height),
+                IndexPosition::Tip => get_last_by_be_u64_key::<_, BlockHash>(
+                    &self.txn,
+                    self.block_store.block_store.block_height_index_db,
+                ),
+                IndexPosition::Key(height) => get_by_be_u64_key::<_, BlockHash>(
+                    &self.txn,
+                    self.block_store.block_store.block_height_index_db,
+                    height,
+                ),
             },
             LmdbBlockStoreIndex::SwitchBlockEraId(position) => match position {
-                IndexPosition::Tip => self.block_store.switch_block_era_id_index.values().last(),
-                IndexPosition::Key(era_id) => {
-                    self.block_store.switch_block_era_id_index.get(&era_id)
-                }
+                IndexPosition::Tip => get_last_by_be_u64_key::<_, BlockHash>(
+                    &self.txn,
+                    self.block_store.block_store.switch_block_era_id_index_db,
+                ),
+                IndexPosition::Key(era_id) => get_by_be_u64_key::<_, BlockHash>(
+                    &self.txn,
+                    self.block_store.block_store.switch_block_era_id_index_db,
+                    era_id.value(),
+                ),
             },
-        }
+        };
+        result.map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))
     }
 
     fn read_block_indexed(
         &self,
         index: LmdbBlockStoreIndex,
     ) -> Result<Option<Block>, BlockStoreError> {
-        self.block_hash_from_index(index)
-            .and_then(|block_hash| {
-                self.block_store
-                    .block_store
-                    .get_single_block(&self.txn, block_hash)
-                    .transpose()
-            })
-            .transpose()
+        match self.block_hash_from_index(index)? {
+            Some(block_hash) => self
+                .block_store
+                .block_store
+                .get_single_block(&self.txn, &block_hash),
+            None => Ok(None),
+        }
     }
 
     fn read_block_header_indexed(
         &self,
         index: LmdbBlockStoreIndex,
     ) -> Result<Option<BlockHeader>, BlockStoreError> {
-        self.block_hash_from_index(index)
-            .and_then(|block_hash| {
-                self.block_store
-                    .block_store
-                    .get_single_block_header(&self.txn, block_hash)
-                    .transpose()
-            })
-            .transpose()
+        match self.block_hash_from_index(index)? {
+            Some(block_hash) => self
+                .block_store
+                .block_store
+                .get_single_block_header(&self.txn, &block_hash),
+            None => Ok(None),
+        }
     }
 
     fn read_block_signatures_indexed(
         &self,
         index: LmdbBlockStoreIndex,
     ) -> Result<Option<BlockSignatures>, BlockStoreError> {
-        self.block_hash_from_index(index)
-            .and_then(|block_hash| {
-                self.block_store
-                    .block_store
-                    .get_block_signatures(&self.txn, block_hash)
-                    .transpose()
-            })
-            .transpose()
+        match self.block_hash_from_index(index)? {
+            Some(block_hash) => self
+                .block_store
+                .block_store
+                .get_block_signatures(&self.txn, &block_hash),
+            None => Ok(None),
+        }
     }
 
     fn read_approvals_hashes_indexed(
         &self,
         index: LmdbBlockStoreIndex,
     ) -> Result<Option<ApprovalsHashes>, BlockStoreError> {
-        self.block_hash_from_index(index)
-            .and_then(|block_hash| {
-                self.block_store
-                    .block_store
-                    .read_approvals_hashes(&self.txn, block_hash)
-                    .transpose()
-            })
-            .transpose()
+        match self.block_hash_from_index(index)? {
+            Some(block_hash) => self
+                .block_store
+                .block_store
+                .read_approvals_hashes(&self.txn, &block_hash),
+            None => Ok(None),
+        }
     }
 
     fn contains_data_indexed(
@@ -522,32 +516,34 @@ impl IndexedLmdbBlockStoreReadTransaction<'_> {
         index: LmdbBlockStoreIndex,
         data_type: DataType,
     ) -> Result<bool, BlockStoreError> {
-        self.block_hash_from_index(index)
-            .map_or(Ok(false), |block_hash| match data_type {
+        match self.block_hash_from_index(index)? {
+            Some(block_hash) => match data_type {
                 DataType::Block => self
                     .block_store
                     .block_store
-                    .block_exists(&self.txn, block_hash),
+                    .block_exists(&self.txn, &block_hash),
                 DataType::BlockHeader => self
                     .block_store
                     .block_store
-                    .block_header_exists(&self.txn, block_hash),
+                    .block_header_exists(&self.txn, &block_hash),
                 DataType::ApprovalsHashes => self
                     .block_store
                     .block_store
-                    .approvals_hashes_exist(&self.txn, block_hash),
+                    .approvals_hashes_exist(&self.txn, &block_hash),
                 DataType::BlockSignatures => self
                     .block_store
                     .block_store
-                    .block_signatures_exist(&self.txn, block_hash),
-            })
+                    .block_signatures_exist(&self.txn, &block_hash),
+            },
+            None => Ok(false),
+        }
     }
 
     pub fn get_switch_block_height(&self, era_id: EraId) -> Result<Option<u64>, BlockStoreError> {
         let index = LmdbBlockStoreIndex::SwitchBlockEraId(IndexPosition::Key(era_id));
-        match self.block_hash_from_index(index) {
+        match self.block_hash_from_index(index)? {
             Some(block_hash) => {
-                let maybe_header: Option<BlockHeader> = self.read(*block_hash)?;
+                let maybe_header: Option<BlockHeader> = self.read(block_hash)?;
                 Ok(maybe_header.map(|header| header.height()))
             }
             None => Ok(None),
@@ -569,12 +565,7 @@ impl BlockStoreTransaction for IndexedLmdbBlockStoreRWTransaction<'_> {
     fn commit(self) -> Result<(), BlockStoreError> {
         self.txn
             .commit()
-            .map_err(|e| BlockStoreError::InternalStorage(Box::new(LmdbExtError::from(e))))?;
-
-        self.block_height_index.commit();
-        self.switch_block_era_id_index.commit();
-        self.transaction_hash_index.commit();
-        Ok(())
+            .map_err(|e| BlockStoreError::InternalStorage(Box::new(LmdbExtError::from(e))))
     }
 
     fn rollback(self) {
@@ -600,9 +591,6 @@ impl BlockStoreProvider for IndexedLmdbBlockStore {
         Ok(IndexedLmdbBlockStoreRWTransaction {
             txn,
             block_store: &self.block_store,
-            block_height_index: TempMap::new(&mut self.block_height_index),
-            switch_block_era_id_index: TempMap::new(&mut self.switch_block_era_id_index),
-            transaction_hash_index: TempMap::new(&mut self.transaction_hash_index),
         })
     }
 }
@@ -823,11 +811,15 @@ impl DataReader<TransactionHash, BlockHashHeightAndEra>
     for IndexedLmdbBlockStoreReadTransaction<'_>
 {
     fn read(&self, key: TransactionHash) -> Result<Option<BlockHashHeightAndEra>, BlockStoreError> {
-        Ok(self.block_store.transaction_hash_index.get(&key).copied())
+        self.txn
+            .get_value_bytesrepr(self.block_store.block_store.transaction_hash_index_db, &key)
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))
     }
 
     fn exists(&self, key: TransactionHash) -> Result<bool, BlockStoreError> {
-        Ok(self.block_store.transaction_hash_index.contains_key(&key))
+        self.txn
+            .value_exists_bytesrepr(self.block_store.block_store.transaction_hash_index_db, &key)
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))
     }
 }
 
@@ -953,19 +945,35 @@ impl DataWriter<BlockHash, Block> for IndexedLmdbBlockStoreRWTransaction<'_> {
         let key = self.block_store.write_block(&mut self.txn, data)?;
 
         if update_height_index {
-            self.block_height_index.insert(block_height, *block_hash);
+            put_by_be_u64_key(
+                &mut self.txn,
+                self.block_store.block_height_index_db,
+                block_height,
+                block_hash,
+            )
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
         }
 
         if update_switch_block_index {
-            self.switch_block_era_id_index.insert(era_id, *block_hash);
+            put_by_be_u64_key(
+                &mut self.txn,
+                self.block_store.switch_block_era_id_index_db,
+                era_id.value(),
+                block_hash,
+            )
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
         }
 
         if update_transaction_hash_index {
             for hash in transaction_hashes {
-                self.transaction_hash_index.insert(
-                    hash,
-                    BlockHashHeightAndEra::new(*block_hash, block_height, era_id),
-                );
+                self.txn
+                    .put_value_bytesrepr(
+                        self.block_store.transaction_hash_index_db,
+                        &hash,
+                        &BlockHashHeightAndEra::new(*block_hash, block_height, era_id),
+                        true,
+                    )
+                    .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
             }
         }
 
@@ -992,14 +1000,29 @@ impl DataWriter<BlockHash, Block> for IndexedLmdbBlockStoreRWTransaction<'_> {
                 .delete_block_body(&mut self.txn, block.body_hash())?;
             */
 
-            self.block_height_index.remove(block.height());
+            delete_by_be_u64_key(
+                &mut self.txn,
+                self.block_store.block_height_index_db,
+                block.height(),
+            )
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
 
             if block.is_switch_block() {
-                self.switch_block_era_id_index.remove(block.era_id());
+                delete_by_be_u64_key(
+                    &mut self.txn,
+                    self.block_store.switch_block_era_id_index_db,
+                    block.era_id().value(),
+                )
+                .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
             }
 
             for hash in transaction_hashes {
-                self.transaction_hash_index.remove(hash);
+                delete_value_bytesrepr(
+                    &mut self.txn,
+                    self.block_store.transaction_hash_index_db,
+                    &hash,
+                )
+                .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
             }
 
             self.block_store
@@ -1017,6 +1040,20 @@ impl DataWriter<BlockHash, ApprovalsHashes> for IndexedLmdbBlockStoreRWTransacti
     fn delete(&mut self, key: BlockHash) -> Result<(), BlockStoreError> {
         self.block_store
             .delete_approvals_hashes(&mut self.txn, &key)
+    }
+}
+
+impl DataWriter<Digest, BlockBody> for IndexedLmdbBlockStoreRWTransaction<'_> {
+    /// Not supported: a block body is always written together with its header, as part of
+    /// writing a whole `Block` (see the `DataWriter<BlockHash, Block>` impl above).
+    fn write(&mut self, _data: &BlockBody) -> Result<Digest, BlockStoreError> {
+        Err(BlockStoreError::UnsupportedOperation)
+    }
+
+    /// Deletes a block body by its hash. Callers are responsible for only doing so once no
+    /// retained block header still references this body hash.
+    fn delete(&mut self, key: Digest) -> Result<(), BlockStoreError> {
+        self.block_store.delete_block_body(&mut self.txn, &key)
     }
 }
 
@@ -1045,11 +1082,23 @@ impl DataWriter<BlockHash, BlockHeader> for IndexedLmdbBlockStoreRWTransaction<'
         let key = self.block_store.write_block_header(&mut self.txn, data)?;
 
         if update_height_index {
-            self.block_height_index.insert(block_height, block_hash);
+            put_by_be_u64_key(
+                &mut self.txn,
+                self.block_store.block_height_index_db,
+                block_height,
+                &block_hash,
+            )
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
         }
 
         if update_switch_block_index {
-            self.switch_block_era_id_index.insert(era_id, block_hash);
+            put_by_be_u64_key(
+                &mut self.txn,
+                self.block_store.switch_block_era_id_index_db,
+                era_id.value(),
+                &block_hash,
+            )
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
         }
 
         Ok(key)
@@ -1062,10 +1111,20 @@ impl DataWriter<BlockHash, BlockHeader> for IndexedLmdbBlockStoreRWTransaction<'
             self.block_store.delete_block_header(&mut self.txn, &key)?;
 
             if block_header.is_switch_block() {
-                self.switch_block_era_id_index.remove(block_header.era_id());
+                delete_by_be_u64_key(
+                    &mut self.txn,
+                    self.block_store.switch_block_era_id_index_db,
+                    block_header.era_id().value(),
+                )
+                .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
             }
 
-            self.block_height_index.remove(block_header.height());
+            delete_by_be_u64_key(
+                &mut self.txn,
+                self.block_store.block_height_index_db,
+                block_header.height(),
+            )
+            .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
         }
         Ok(())
     }
@@ -1131,18 +1190,28 @@ impl DataWriter<BlockHashHeightAndEra, BlockExecutionResults>
 
         if update_transaction_hash_index {
             for hash in transaction_hashes {
-                self.transaction_hash_index.insert(
-                    hash,
-                    BlockHashHeightAndEra::new(block_hash, block_height, era_id),
-                );
+                self.txn
+                    .put_value_bytesrepr(
+                        self.block_store.transaction_hash_index_db,
+                        &hash,
+                        &BlockHashHeightAndEra::new(block_hash, block_height, era_id),
+                        true,
+                    )
+                    .map_err(|err| BlockStoreError::InternalStorage(Box::new(err)))?;
             }
         }
 
         Ok(data.block_info)
     }
 
-    fn delete(&mut self, _key: BlockHashHeightAndEra) -> Result<(), BlockStoreError> {
-        Err(BlockStoreError::UnsupportedOperation)
+    /// Deletes the execution results for every transaction in the block identified by
+    /// `key.block_hash` (the block itself, header and body, must still be present -- this reads
+    /// it to find its transaction hashes).
+    fn delete(&mut self, key: BlockHashHeightAndEra) -> Result<(), BlockStoreError> {
+        let _ = self
+            .block_store
+            .delete_execution_results(&mut self.txn, &key.block_hash)?;
+        Ok(())
     }
 }
 
@@ -1252,5 +1321,239 @@ impl DataReader<BlockHash, Vec<Transfer>> for IndexedLmdbBlockStoreRWTransaction
 
     fn exists(&self, key: BlockHash) -> Result<bool, BlockStoreError> {
         self.block_store.has_transfers(&self.txn, &key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use casper_types::{
+        testing::TestRng, BlockHeaderV2, EraEndV2, ProtocolVersion, PublicKey, SecretKey, Timestamp,
+    };
+    use once_cell::sync::OnceCell;
+    use rand::Rng;
+    use tempfile::TempDir;
+
+    /// Number of headers to write: deliberately > 256 so that, were the disk-backed indexes ever
+    /// keyed by plain little-endian `bytesrepr` bytes instead of the big-endian encoding, the
+    /// `APPEND`-based bulk write in `reindex` would violate LMDB's required key order (since
+    /// little-endian byte-lexicographic order diverges from numeric order once values exceed a
+    /// single byte) and fail loudly rather than silently produce a wrong index.
+    const HEADER_COUNT: u64 = 300;
+
+    fn header_at_height(rng: &mut TestRng, height: u64, proposer: &PublicKey) -> BlockHeader {
+        let is_switch_block = height % 10 == 9;
+        let era_id = EraId::new(height / 10);
+        let era_end = is_switch_block.then(|| EraEndV2::random(rng));
+        BlockHeader::V2(BlockHeaderV2::new(
+            BlockHash::random(rng),
+            Digest::random(rng),
+            Digest::hash(height.to_le_bytes()),
+            rng.gen(),
+            Digest::random(rng),
+            era_end,
+            Timestamp::now(),
+            era_id,
+            height,
+            ProtocolVersion::V1_0_0,
+            proposer.clone(),
+            1,
+            None,
+            OnceCell::new(),
+        ))
+    }
+
+    #[test]
+    fn reindex_rebuilds_disk_backed_indexes_via_append() {
+        let rng = &mut TestRng::new();
+        let tempdir = TempDir::new().expect("should create tempdir");
+        let block_store =
+            LmdbBlockStore::new(tempdir.path(), 64 * 1024 * 1024).expect("should create store");
+        let mut indexed_store = IndexedLmdbBlockStore::new(block_store);
+
+        let secret_key = SecretKey::random(rng);
+        let proposer = PublicKey::from(&secret_key);
+
+        let mut headers = Vec::new();
+        {
+            let mut rw_txn = indexed_store.checkout_rw().expect("should checkout rw");
+            for height in 0..HEADER_COUNT {
+                let header = header_at_height(rng, height, &proposer);
+                let _ = DataWriter::<BlockHash, BlockHeader>::write(&mut rw_txn, &header)
+                    .expect("should write header");
+                headers.push(header);
+            }
+            rw_txn.commit().expect("should commit");
+        }
+
+        indexed_store.reindex().expect("reindex should succeed");
+
+        let ro_txn = indexed_store.checkout_ro().expect("should checkout ro");
+
+        // Spot-check a handful of heights, including ones that require crossing the
+        // little-endian single-byte boundary (e.g. 255 -> 256) to catch ordering bugs.
+        for &height in &[0u64, 1, 254, 255, 256, 257, HEADER_COUNT - 1] {
+            let expected_hash = headers[height as usize].block_hash();
+            let actual: Option<BlockHeader> = ro_txn.read(height).expect("read by height");
+            assert_eq!(
+                actual.expect("header should exist").block_hash(),
+                expected_hash,
+                "wrong header at height {height}"
+            );
+        }
+
+        // Tip should be the highest height.
+        let tip: Option<BlockHeader> = ro_txn.read(Tip).expect("read tip");
+        assert_eq!(
+            tip.expect("tip should exist").height(),
+            HEADER_COUNT - 1,
+            "tip should be the highest height"
+        );
+
+        // Switch blocks (height % 10 == 9) should be resolvable by era ID.
+        for &height in &[9u64, 99, 259, HEADER_COUNT - 1] {
+            assert_eq!(
+                height % 10,
+                9,
+                "test bug: {height} is not a switch block height"
+            );
+            let era_id = EraId::new(height / 10);
+            let expected_hash = headers[height as usize].block_hash();
+            let actual: Option<BlockHeader> = ro_txn.read(era_id).expect("read by era id");
+            assert_eq!(
+                actual
+                    .expect("switch block header should exist")
+                    .block_hash(),
+                expected_hash,
+                "wrong switch block header for era {era_id}"
+            );
+        }
+
+        // Latest switch block should be the highest-height header with `is_switch_block()` set
+        // (derived from `headers` directly, rather than hardcoded, to avoid off-by-one mistakes).
+        let latest_switch_block_height = headers
+            .iter()
+            .filter(|header| header.is_switch_block())
+            .map(|header| header.height())
+            .max()
+            .expect("should have at least one switch block");
+        let latest_switch: Option<BlockHeader> =
+            DataReader::<LatestSwitchBlock, BlockHeader>::read(&ro_txn, LatestSwitchBlock)
+                .expect("read latest switch block");
+        assert_eq!(
+            latest_switch
+                .expect("latest switch block should exist")
+                .height(),
+            latest_switch_block_height,
+            "wrong latest switch block"
+        );
+    }
+
+    #[test]
+    fn init_builds_index_when_headers_exist_but_index_is_empty() {
+        let rng = &mut TestRng::new();
+        let tempdir = TempDir::new().expect("should create tempdir");
+        let block_store =
+            LmdbBlockStore::new(tempdir.path(), 64 * 1024 * 1024).expect("should create store");
+        let mut indexed_store = IndexedLmdbBlockStore::new(block_store);
+
+        let secret_key = SecretKey::random(rng);
+        let proposer = PublicKey::from(&secret_key);
+
+        // Write headers directly through the un-indexed `LmdbBlockStore`, bypassing the
+        // index-maintaining `DataWriter` impl -- simulating a migration from a binary version
+        // that didn't yet maintain these disk-backed indexes.
+        let header = header_at_height(rng, 0, &proposer);
+        {
+            let mut txn = indexed_store
+                .block_store
+                .env
+                .begin_rw_txn()
+                .expect("should begin rw txn");
+            let _ = indexed_store
+                .block_store
+                .write_block_header(&mut txn, &header)
+                .expect("should write header");
+            txn.commit().expect("should commit");
+        }
+
+        // The index hasn't been told about this header yet.
+        {
+            let ro_txn = indexed_store.checkout_ro().expect("should checkout ro");
+            let by_height: Option<BlockHeader> = ro_txn.read(0u64).expect("read by height");
+            assert!(by_height.is_none(), "index should not exist yet");
+        }
+
+        indexed_store.init().expect("init should succeed");
+
+        let ro_txn = indexed_store.checkout_ro().expect("should checkout ro");
+        let by_height: Option<BlockHeader> = ro_txn.read(0u64).expect("read by height");
+        assert_eq!(
+            by_height
+                .expect("header should be indexed after init")
+                .block_hash(),
+            header.block_hash(),
+            "init should have built the height index from the existing headers"
+        );
+    }
+
+    #[test]
+    fn init_does_not_rebuild_an_already_populated_index() {
+        let rng = &mut TestRng::new();
+        let tempdir = TempDir::new().expect("should create tempdir");
+        let block_store =
+            LmdbBlockStore::new(tempdir.path(), 64 * 1024 * 1024).expect("should create store");
+        let mut indexed_store = IndexedLmdbBlockStore::new(block_store);
+
+        let secret_key = SecretKey::random(rng);
+        let proposer = PublicKey::from(&secret_key);
+
+        // Write two headers through the normal, index-maintaining path.
+        let headers: Vec<BlockHeader> = (0..2)
+            .map(|height| header_at_height(rng, height, &proposer))
+            .collect();
+        {
+            let mut rw_txn = indexed_store.checkout_rw().expect("should checkout rw");
+            for header in &headers {
+                let _ = DataWriter::<BlockHash, BlockHeader>::write(&mut rw_txn, header)
+                    .expect("should write header");
+            }
+            rw_txn.commit().expect("should commit");
+        }
+
+        // Directly corrupt the height index by deleting the entry for height 0, without touching
+        // the header itself -- an inconsistency that only a full rebuild would fix.
+        {
+            let mut index_txn = indexed_store
+                .block_store
+                .env
+                .begin_rw_txn()
+                .expect("should begin rw txn");
+            delete_by_be_u64_key(
+                &mut index_txn,
+                indexed_store.block_store.block_height_index_db,
+                0,
+            )
+            .expect("should delete index entry");
+            index_txn.commit().expect("should commit");
+        }
+
+        indexed_store.init().expect("init should succeed");
+
+        // Since the index wasn't empty (height 1's entry is still present), `init` must have
+        // skipped rebuilding it -- so the deleted entry for height 0 stays missing.
+        let ro_txn = indexed_store.checkout_ro().expect("should checkout ro");
+        let by_height_0: Option<BlockHeader> = ro_txn.read(0u64).expect("read by height");
+        assert!(
+            by_height_0.is_none(),
+            "init should not have rebuilt an already-populated index"
+        );
+        let by_height_1: Option<BlockHeader> = ro_txn.read(1u64).expect("read by height");
+        assert_eq!(
+            by_height_1
+                .expect("height 1 should still be indexed")
+                .block_hash(),
+            headers[1].block_hash()
+        );
     }
 }
