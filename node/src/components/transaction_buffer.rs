@@ -431,6 +431,7 @@ impl TransactionBuffer {
             None => {
                 return AppendableBlock::new(
                     self.chainspec.transaction_config.clone(),
+                    self.chainspec.evm_config.clone(),
                     self.chainspec.vacancy_config.min_gas_price,
                     timestamp,
                 );
@@ -438,6 +439,7 @@ impl TransactionBuffer {
         };
         let mut ret = AppendableBlock::new(
             self.chainspec.transaction_config.clone(),
+            self.chainspec.evm_config.clone(),
             current_era_gas_price,
             timestamp,
         );
@@ -757,6 +759,7 @@ where
                     None => responder
                         .respond(AppendableBlock::new(
                             self.chainspec.transaction_config.clone(),
+                            self.chainspec.evm_config.clone(),
                             self.chainspec.vacancy_config.min_gas_price,
                             timestamp,
                         ))

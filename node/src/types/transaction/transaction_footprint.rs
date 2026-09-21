@@ -45,6 +45,7 @@ impl TransactionFootprint {
             transaction,
             chainspec.core_config.pricing_handling,
             &chainspec.transaction_config,
+            &chainspec.evm_config,
         )?;
         Self::new_from_meta_transaction(chainspec, &transaction)
     }
@@ -56,11 +57,7 @@ impl TransactionFootprint {
         let gas_price_tolerance = transaction.gas_price_tolerance()?;
         let gas_limit = transaction.gas_limit(chainspec)?;
         let lane_id = transaction.transaction_lane();
-        if !chainspec
-            .transaction_config
-            .transaction_v1_config
-            .is_supported(lane_id)
-        {
+        if !chainspec.is_supported(lane_id) {
             return Err(InvalidTransaction::V1(
                 InvalidTransactionV1::InvalidTransactionLane(lane_id),
             ));
