@@ -174,7 +174,7 @@ pub(crate) fn validate_transaction_config(
     let total_txn_slots = transaction_config
         .transaction_v1_config
         .get_max_block_count()
-        + evm_config.get_max_evm_transaction_count();
+        + evm_config.get_max_evm_transaction_count().unwrap_or(0);
     if transaction_config.block_max_approval_count < total_txn_slots as u32 {
         return false;
     }

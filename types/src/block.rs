@@ -434,7 +434,7 @@ impl Block {
                 let per_block_capacity = transaction_config
                     .transaction_v1_config
                     .get_max_block_count()
-                    + evm_config.get_max_evm_transaction_count();
+                    + evm_config.get_max_evm_transaction_count().unwrap_or(0);
                 let has_hit_slot_limt = self.has_hit_slot_capacity(transaction_config, evm_config);
                 if has_hit_slot_limt {
                     100u64

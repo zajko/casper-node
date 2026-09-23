@@ -12,7 +12,6 @@ use serde::{
 };
 use serde::{Deserialize, Serialize};
 
-#[cfg(any(feature = "std", test))]
 use crate::chainspec::TransactionLaneDefinition;
 use crate::{
     bytesrepr::{self, FromBytes, ToBytes, U8_SERIALIZED_LENGTH},
@@ -94,7 +93,6 @@ pub struct EvmConfig {
     /// Number of wei represented by one mote.
     pub wei_per_mote: u64,
     /// Lane configurations for EVM transactions.
-    #[cfg(any(feature = "std", test))]
     #[serde(
         serialize_with = "transaction_lane_definitions_to_vec",
         deserialize_with = "vec_to_transaction_lane_definitions"
@@ -111,7 +109,6 @@ impl Default for EvmConfig {
             block_gas_limit: 30_000_000,
             base_fee: 0,
             wei_per_mote: DEFAULT_WEI_PER_MOTE,
-            #[cfg(any(feature = "std", test))]
             transaction_lanes: Vec::new(),
         }
     }
@@ -202,11 +199,7 @@ impl EvmConfig {
     }
 }
 
-// EVM transaction lanes reuse `TransactionLaneDefinition`, which lives in the `chainspec`
-// module and is only available with the `std` feature (or in tests). `EvmConfig` itself must
-// stay usable without `std` (e.g. when `casper-types` is compiled for on-chain Wasm
-// contracts), so the lane-related field and methods are confined to this gated block.
-#[cfg(any(feature = "std", test))]
+// EVM transaction lanes reuse `TransactionLaneDefinition`, which lives in the `chainspec`.
 impl EvmConfig {
     /// Returns the configured EVM transaction lanes.
     pub fn transaction_lanes(&self) -> &Vec<TransactionLaneDefinition> {
@@ -255,11 +248,16 @@ impl EvmConfig {
     }
 
     /// Returns the maximum number of EVM transactions across all configured EVM lanes.
-    pub fn get_max_evm_transaction_count(&self) -> u64 {
-        self.transaction_lanes
-            .iter()
-            .map(TransactionLaneDefinition::max_transaction_count)
-            .sum()
+    pub fn get_max_evm_transaction_count(&self) -> Option<u64> {
+        if !self.enabled {
+            return None;
+        }
+        Some(
+            self.transaction_lanes
+                .iter()
+                .map(TransactionLaneDefinition::max_transaction_count)
+                .sum(),
+        )
     }
 
     /// Is the given EVM lane identifier supported.
@@ -322,7 +320,6 @@ impl ToBytes for EvmConfig {
             + self.block_gas_limit.serialized_length()
             + self.base_fee.serialized_length()
             + self.wei_per_mote.serialized_length();
-        #[cfg(any(feature = "std", test))]
         let base = {
             let transaction_lanes_as_vecs: Vec<Vec<u64>> = self
                 .transaction_lanes
@@ -341,15 +338,12 @@ impl ToBytes for EvmConfig {
         self.block_gas_limit.write_bytes(writer)?;
         self.base_fee.write_bytes(writer)?;
         self.wei_per_mote.write_bytes(writer)?;
-        #[cfg(any(feature = "std", test))]
-        {
-            let transaction_lanes_as_vecs: Vec<Vec<u64>> = self
-                .transaction_lanes
-                .iter()
-                .map(transaction_lane_definition_to_vec)
-                .collect();
-            transaction_lanes_as_vecs.write_bytes(writer)?;
-        }
+        let transaction_lanes_as_vecs: Vec<Vec<u64>> = self
+            .transaction_lanes
+            .iter()
+            .map(transaction_lane_definition_to_vec)
+            .collect();
+        transaction_lanes_as_vecs.write_bytes(writer)?;
         Ok(())
     }
 }
@@ -362,43 +356,24 @@ impl FromBytes for EvmConfig {
         let (block_gas_limit, remainder) = u64::from_bytes(remainder)?;
         let (base_fee, remainder) = u64::from_bytes(remainder)?;
         let (wei_per_mote, remainder) = u64::from_bytes(remainder)?;
-        #[cfg(any(feature = "std", test))]
-        {
-            let (raw_transaction_lanes, remainder): (Vec<Vec<u64>>, &[u8]) =
-                FromBytes::from_bytes(remainder)?;
-            let transaction_lanes: Result<Vec<TransactionLaneDefinition>, _> =
-                raw_transaction_lanes
-                    .into_iter()
-                    .map(TransactionLaneDefinition::try_from)
-                    .collect();
-            Ok((
-                EvmConfig {
-                    enabled,
-                    chain_id,
-                    spec,
-                    block_gas_limit,
-                    base_fee,
-                    wei_per_mote,
-                    transaction_lanes: transaction_lanes
-                        .map_err(|_| bytesrepr::Error::Formatting)?,
-                },
-                remainder,
-            ))
-        }
-        #[cfg(not(any(feature = "std", test)))]
-        {
-            Ok((
-                EvmConfig {
-                    enabled,
-                    chain_id,
-                    spec,
-                    block_gas_limit,
-                    base_fee,
-                    wei_per_mote,
-                },
-                remainder,
-            ))
-        }
+        let (raw_transaction_lanes, remainder): (Vec<Vec<u64>>, &[u8]) =
+            FromBytes::from_bytes(remainder)?;
+        let transaction_lanes: Result<Vec<TransactionLaneDefinition>, _> = raw_transaction_lanes
+            .into_iter()
+            .map(TransactionLaneDefinition::try_from)
+            .collect();
+        Ok((
+            EvmConfig {
+                enabled,
+                chain_id,
+                spec,
+                block_gas_limit,
+                base_fee,
+                wei_per_mote,
+                transaction_lanes: transaction_lanes.map_err(|_| bytesrepr::Error::Formatting)?,
+            },
+            remainder,
+        ))
     }
 }
 
@@ -452,6 +427,7 @@ mod tests {
 
     fn config_with_lanes() -> EvmConfig {
         let mut config = EvmConfig::default();
+        config.enabled = true;
         config.set_transaction_lanes(vec![
             TransactionLaneDefinition::new(100, 1_000, 100, 1_000_000, 5),
             TransactionLaneDefinition::new(101, 10_000, 1_000, 10_000_000, 2),
@@ -505,7 +481,14 @@ mod tests {
     #[test]
     fn should_sum_max_evm_transaction_count() {
         let config = config_with_lanes();
-        assert_eq!(config.get_max_evm_transaction_count(), 7);
+        assert_eq!(config.get_max_evm_transaction_count(), Some(7));
+    }
+
+    #[test]
+    fn should_return_none_max_evm_transaction_count_when_evm_disabled() {
+        let mut config = config_with_lanes();
+        config.enabled = false;
+        assert_eq!(config.get_max_evm_transaction_count(), None);
     }
 
     #[test]
