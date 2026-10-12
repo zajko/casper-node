@@ -12,7 +12,7 @@ use crate::{
     utils,
 };
 use casper_types::{
-    testing::TestRng, Deploy, EraId, SecretKey, TestBlockBuilder, TimeDiff, Transaction,
+    testing::TestRng, Deploy, EraId, EvmConfig, SecretKey, TestBlockBuilder, TimeDiff, Transaction,
     TransactionConfig, TransactionLaneDefinition, TransactionV1Config,
     DEFAULT_LARGE_TRANSACTION_GAS_LIMIT,
 };
@@ -1318,9 +1318,9 @@ fn should_have_diverse_proposable_blocks_with_stocked_buffer() {
     let buckets1: HashMap<_, _> = transaction_buffer
         .buckets(GAS_PRICE_TOLERANCE)
         .into_iter()
-        .map(|(digest, footprints)| {
+        .map(|(bucket, footprints)| {
             (
-                *digest,
+                bucket,
                 footprints
                     .into_iter()
                     .map(|(hash, footprint)| (hash, footprint.clone()))
@@ -1335,9 +1335,9 @@ fn should_have_diverse_proposable_blocks_with_stocked_buffer() {
     let buckets2: HashMap<_, _> = transaction_buffer
         .buckets(GAS_PRICE_TOLERANCE)
         .into_iter()
-        .map(|(digest, footprints)| {
+        .map(|(bucket, footprints)| {
             (
-                *digest,
+                bucket,
                 footprints
                     .into_iter()
                     .map(|(hash, footprint)| (hash, footprint.clone()))
@@ -1536,4 +1536,162 @@ fn test_buckets_mixed_load() {
         ERA_ONE,
         Timestamp::now() + TimeDiff::from_millis(16384 / 6),
     );
+}
+
+const EVM_LANE_ID: u8 = 100;
+
+fn evm_transaction_buffer(
+    footprints: &[TransactionFootprint],
+    max_transaction_count: u64,
+) -> TransactionBuffer {
+    let evm_config = EvmConfig {
+        enabled: true,
+        transaction_lanes: vec![TransactionLaneDefinition::new(
+            EVM_LANE_ID,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            max_transaction_count,
+        )],
+        ..Default::default()
+    };
+    let chainspec = Arc::new(Chainspec {
+        evm_config,
+        ..Default::default()
+    });
+    let mut transaction_buffer =
+        TransactionBuffer::new(chainspec, Config::default(), &Registry::new()).unwrap();
+    transaction_buffer
+        .prices
+        .insert(ERA_ONE, DEFAULT_MINIMUM_GAS_PRICE);
+    for footprint in footprints {
+        transaction_buffer.buffer.insert(
+            footprint.transaction_hash(),
+            (
+                footprint.timestamp().saturating_add(footprint.ttl()),
+                Some(footprint.clone()),
+            ),
+        );
+    }
+    transaction_buffer
+}
+
+/// Proposes a block from the given EVM footprints and returns `(sender, nonce)` for each
+/// proposed transaction, in execution order.
+fn propose_evm(footprints: &[TransactionFootprint]) -> Vec<(evm::Address, u64)> {
+    let mut transaction_buffer = evm_transaction_buffer(footprints, 20);
+    let (proposed, _) = propose_evm_from(&mut transaction_buffer, footprints, Timestamp::now());
+    proposed
+}
+
+/// Proposes a block from `transaction_buffer` and returns `(sender, nonce)` for each proposed
+/// transaction, in execution order, along with the proposed transaction hashes.
+fn propose_evm_from(
+    transaction_buffer: &mut TransactionBuffer,
+    footprints: &[TransactionFootprint],
+    timestamp: Timestamp,
+) -> (Vec<(evm::Address, u64)>, Vec<TransactionHash>) {
+    let expiry = timestamp.saturating_add(TimeDiff::from_seconds(1));
+    let payload = transaction_buffer
+        .appendable_block(timestamp, ERA_ONE, expiry)
+        .into_block_payload(vec![], Default::default(), false);
+    let transaction_hashes: Vec<_> = payload
+        .finalized_payload()
+        .values()
+        .flatten()
+        .copied()
+        .collect();
+    let proposed = transaction_hashes
+        .iter()
+        .map(|transaction_hash| {
+            footprints
+                .iter()
+                .find(|footprint| footprint.transaction_hash() == *transaction_hash)
+                .and_then(TransactionFootprint::evm_sender_nonce)
+                .expect("only EVM footprints were buffered")
+        })
+        .collect();
+    (proposed, transaction_hashes)
+}
+
+fn nonces_of(proposed: &[(evm::Address, u64)], sender: evm::Address) -> Vec<u64> {
+    proposed
+        .iter()
+        .filter(|(proposed_sender, _)| *proposed_sender == sender)
+        .map(|(_, nonce)| *nonce)
+        .collect()
+}
+
+#[test]
+fn should_propose_evm_senders_round_robin_in_nonce_order() {
+    let mut rng = TestRng::new();
+    let a = evm::Address::new([0xaa; evm::ADDRESS_LENGTH]);
+    let b = evm::Address::new([0xbb; evm::ADDRESS_LENGTH]);
+    let footprints: Vec<_> = [(a, 5), (b, 7), (a, 3), (b, 8), (a, 4), (b, 6)]
+        .into_iter()
+        .map(|(sender, nonce)| {
+            TransactionFootprint::random_evm(EVM_LANE_ID, sender, nonce, &mut rng)
+        })
+        .collect();
+
+    let proposed = propose_evm(&footprints);
+
+    assert_eq!(nonces_of(&proposed, a), vec![3, 4, 5]);
+    assert_eq!(nonces_of(&proposed, b), vec![6, 7, 8]);
+    assert!(
+        proposed.windows(2).all(|pair| pair[0].0 != pair[1].0),
+        "senders should alternate: {proposed:?}"
+    );
+}
+
+#[test]
+fn should_propose_evm_nonce_gaps_as_they_are() {
+    let mut rng = TestRng::new();
+    let a = evm::Address::new([0xaa; evm::ADDRESS_LENGTH]);
+    let footprints: Vec<_> = [0, 1, 3, 6]
+        .into_iter()
+        .map(|nonce| TransactionFootprint::random_evm(EVM_LANE_ID, a, nonce, &mut rng))
+        .collect();
+
+    assert_eq!(nonces_of(&propose_evm(&footprints), a), vec![0, 1, 3, 6]);
+}
+
+#[test]
+fn should_propose_repeated_evm_nonces_as_they_are() {
+    let mut rng = TestRng::new();
+    let a = evm::Address::new([0xaa; evm::ADDRESS_LENGTH]);
+    let footprints: Vec<_> = [0, 1, 1, 2]
+        .into_iter()
+        .map(|nonce| TransactionFootprint::random_evm(EVM_LANE_ID, a, nonce, &mut rng))
+        .collect();
+
+    assert_eq!(nonces_of(&propose_evm(&footprints), a), vec![0, 1, 1, 2]);
+}
+
+#[test]
+fn should_propose_rest_of_evm_run_left_out_by_full_lane_in_next_proposal() {
+    let mut rng = TestRng::new();
+    let a = evm::Address::new([0xaa; evm::ADDRESS_LENGTH]);
+    let b = evm::Address::new([0xbb; evm::ADDRESS_LENGTH]);
+    let footprints: Vec<_> = [(a, 0), (a, 1), (a, 2), (b, 0), (b, 1), (b, 2)]
+        .into_iter()
+        .map(|(sender, nonce)| {
+            TransactionFootprint::random_evm(EVM_LANE_ID, sender, nonce, &mut rng)
+        })
+        .collect();
+    // The lane fits four transactions, so both senders' runs are cut after nonce 1.
+    let mut transaction_buffer = evm_transaction_buffer(&footprints, 4);
+
+    let first_timestamp = Timestamp::now();
+    let (first, first_hashes) =
+        propose_evm_from(&mut transaction_buffer, &footprints, first_timestamp);
+    assert_eq!(nonces_of(&first, a), vec![0, 1]);
+    assert_eq!(nonces_of(&first, b), vec![0, 1]);
+
+    transaction_buffer.register_transactions(first_timestamp, first_hashes.iter());
+
+    let second_timestamp = first_timestamp.saturating_add(TimeDiff::from_millis(1));
+    let (second, _) = propose_evm_from(&mut transaction_buffer, &footprints, second_timestamp);
+    assert_eq!(nonces_of(&second, a), vec![2]);
+    assert_eq!(nonces_of(&second, b), vec![2]);
 }
